@@ -1,0 +1,170 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────────────────────────
+   Acceptra Design System v2.0 — CSS Custom Properties
+   Source of truth: docs/ui_design/DESIGN_SYSTEM_Acceptra.md
+   Style: Minimalist · Corporate (glassmorphism REMOVED)
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Surface ── */
+  --color-bg-canvas:  #F9FAFB;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-subtle:  #F3F4F6;
+  --color-bg-inverse: #111827;
+
+  /* ── Text ── */
+  --color-text-primary:   #111827;
+  --color-text-secondary: #4B5563;
+  --color-text-tertiary:  #9CA3AF;
+  --color-text-inverse:   #FFFFFF;
+  --color-text-link:      #325F7D;
+
+  /* ── Brand (Aviat) ── */
+  --color-brand:            #55AA39;
+  --color-brand-ink:        #3B6D11;
+  --color-brand-hover:      #345F0F;
+  --color-brand-surface:    #EAF3DE;
+  --color-secondary:        #325F7D;
+  --color-secondary-surface:#E6F1FB;
+
+  /* ── Semantic ── */
+  --color-info-surface:    #E6F1FB; --color-info-text:    #185FA5;
+  --color-success-surface: #EAF3DE; --color-success-text: #3B6D11;
+  --color-warning-surface: #FAEEDA; --color-warning-text: #854F0B;
+  --color-danger-surface:  #FCEBEB; --color-danger-text:  #A32D2D;
+
+  /* ── Border & Ring ── */
+  --color-border:        #E5E7EB;
+  --color-border-strong: #D1D5DB;
+  --color-ring:          rgba(85,170,57,.40);
+
+  /* ── Radius ── */
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-pill: 999px;
+
+  /* ── Elevation (border + shadow, no blur) ── */
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-sm: 0 1px 3px rgba(16,24,40,.08), 0 1px 2px rgba(16,24,40,.04);
+  --shadow-md: 0 4px 8px -2px rgba(16,24,40,.10), 0 2px 4px -2px rgba(16,24,40,.06);
+  --shadow-lg: 0 12px 16px -4px rgba(16,24,40,.08), 0 4px 6px -2px rgba(16,24,40,.03);
+
+  /* ── Motion ── */
+  --ease-standard: cubic-bezier(.4,0,.2,1);
+  --ease-out:      cubic-bezier(0,0,.2,1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+
+  /* ── Typography ── */
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* ── shadcn/ui semantic tokens (HSL — Aviat Corporate themed) ── */
+  --background:           210 20% 99%;
+  --foreground:           222 47% 11%;
+  --card:                 0 0% 100%;
+  --card-foreground:      222 47% 11%;
+  --popover:              0 0% 100%;
+  --popover-foreground:   222 47% 11%;
+  --primary:              93 73% 25%;       /* #3B6D11 Deep Green */
+  --primary-foreground:   0 0% 100%;
+  --secondary:            204 43% 34%;      /* #325F7D Ming Blue */
+  --secondary-foreground: 0 0% 100%;
+  --muted:                220 14% 96%;
+  --muted-foreground:     215 14% 34%;      /* #4B5563 */
+  --accent:               204 60% 94%;      /* ming surface #E6F1FB */
+  --accent-foreground:    204 43% 28%;
+  --destructive:          0 57% 41%;        /* #A32D2D */
+  --destructive-foreground: 0 0% 100%;
+  --border:               220 13% 91%;
+  --input:                220 13% 85%;
+  --ring:                 105 50% 45%;      /* #55AA39 Aviat Green */
+  --radius:               0.5rem;
+}
+
+.dark {
+  --color-bg-canvas:  #0E1726;
+  --color-bg-surface: #141C2A;
+  --color-bg-subtle:  #1B2536;
+  --color-bg-inverse: #FFFFFF;
+  --color-text-primary:   #F3F4F6;
+  --color-text-secondary: #AEB8C7;
+  --color-text-tertiary:  #5C6B7E;
+  --color-text-inverse:   #0E1726;
+  --color-text-link:      #7FB4E6;
+  --color-brand:            #7ED321;
+  --color-brand-ink:        #A8E063;
+  --color-brand-hover:      #8FE13A;
+  --color-brand-surface:    #1F3314;
+  --color-secondary:        #7FB4E6;
+  --color-secondary-surface:#10243A;
+  --color-info-surface:    #10243A; --color-info-text:    #7FB4E6;
+  --color-success-surface: #1F3314; --color-success-text: #A8E063;
+  --color-warning-surface: #2E2410; --color-warning-text: #E6B25C;
+  --color-danger-surface:  #2E1414; --color-danger-text:  #E68A8A;
+  --color-border:        #27324A;
+  --color-border-strong: #33415C;
+  --color-ring:          rgba(126,211,33,.40);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.4);
+  --shadow-md: 0 4px 8px -2px rgba(0,0,0,.5);
+  --shadow-lg: 0 12px 16px -4px rgba(0,0,0,.55);
+
+  --background:           222 39% 11%;
+  --foreground:           220 14% 96%;
+  --card:                 222 31% 14%;
+  --card-foreground:      220 14% 96%;
+  --popover:              222 31% 14%;
+  --popover-foreground:   220 14% 96%;
+  --primary:              88 64% 49%;
+  --primary-foreground:   222 47% 11%;
+  --secondary:            208 64% 70%;
+  --secondary-foreground: 222 47% 11%;
+  --muted:                222 25% 18%;
+  --muted-foreground:     217 14% 73%;
+  --accent:               208 50% 22%;
+  --accent-foreground:    208 64% 80%;
+  --destructive:          0 50% 50%;
+  --destructive-foreground: 0 0% 100%;
+  --border:               222 20% 22%;
+  --input:                222 20% 28%;
+  --ring:                 88 64% 49%;
+}
+
+/* ─── Base ─── */
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+  background: var(--color-bg-canvas);
+}
+
+/* ─── Card utility ─── */
+@layer components {
+  .card {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+  }
+}
+
+/* ─── Reduced motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+/* ─── Base overrides ─── */
+@layer base {
+  * { @apply border-border; }
+}

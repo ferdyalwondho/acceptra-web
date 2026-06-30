@@ -1,0 +1,131 @@
+services:
+
+  # ─── PHP-FPM Application ───────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: acceptra_app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    env_file: .env
+    volumes:
+      - .:/var/www/html
+      - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+      - vendor_cache:/var/www/html/vendor
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - acceptra
+
+  # ─── Nginx Web Server ──────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: acceptra_nginx
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-80}:80"
+    volumes:
+      - .:/var/www/html
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - acceptra
+
+  # ─── PostgreSQL 16 ─────────────────────────────────────────────
+  pgsql:
+    image: postgres:16-alpine
+    container_name: acceptra_pgsql
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-acceptra}
+      POSTGRES_USER: ${DB_USERNAME:-acceptra}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - pgsql_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT_FORWARD:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-acceptra} -d ${DB_DATABASE:-acceptra}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - acceptra
+
+  # ─── Redis 7 ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: acceptra_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT_FORWARD:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - acceptra
+
+  # ─── Queue Worker ──────────────────────────────────────────────
+  queue:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: acceptra_queue
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600 --memory=128
+    env_file: .env
+    volumes:
+      - .:/var/www/html
+      - vendor_cache:/var/www/html/vendor
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - acceptra
+
+  # ─── Task Scheduler ────────────────────────────────────────────
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: acceptra_scheduler
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: >
+      sh -c "while true; do php artisan schedule:run --verbose --no-interaction & sleep 60; done"
+    env_file: .env
+    volumes:
+      - .:/var/www/html
+      - vendor_cache:/var/www/html/vendor
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - acceptra
+
+networks:
+  acceptra:
+    driver: bridge
+
+volumes:
+  pgsql_data:
+    driver: local
+  redis_data:
+    driver: local
+  vendor_cache:
+    driver: local
