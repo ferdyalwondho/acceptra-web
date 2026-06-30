@@ -11,6 +11,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
+        // Production di belakang proxy Cloudflare: percayai header X-Forwarded-*
+        // agar HTTPS, host, dan client IP terdeteksi benar (cegah redirect loop & link http://).
+        $middleware->trustProxies(at: '*');
+
         $middleware->web(append: [
             \App\Http\Middleware\SetUserLocale::class,
             \App\Http\Middleware\HandleInertiaRequests::class,
