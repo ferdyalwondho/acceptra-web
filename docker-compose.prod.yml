@@ -1,0 +1,18 @@
+# Override production. Pakai bersama docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Selebihnya dikendalikan lewat .env production:
+#   NGINX_CONF=prod.conf      -> nginx pakai SSL (443) Cloudflare Origin Cert
+#   PHP_INI=prod.ini          -> OPcache mode production
+#   DB_HOST_BIND=127.0.0.1    -> PostgreSQL tidak terekspos ke internet (bypass UFW)
+#   REDIS_HOST_BIND=127.0.0.1 -> Redis tidak terekspos ke internet
+#
+# Override ini hanya menambah port 443 + mount sertifikat (target baru, tidak bentrok).
+
+services:
+
+  nginx:
+    ports:
+      - "443:443"
+    volumes:
+      - ./docker/nginx/certs:/etc/nginx/certs:ro
