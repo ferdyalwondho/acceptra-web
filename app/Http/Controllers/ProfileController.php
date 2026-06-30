@@ -67,7 +67,7 @@ class ProfileController extends Controller
         $fileToken = (string) Str::uuid7();
         $path      = "signatures/{$userId}/{$fileToken}.{$ext}";
 
-        Storage::disk('local')->put($path, $decoded);
+        Storage::put($path, $decoded);
 
         DB::transaction(function () use ($userId, $path) {
             Signature::where('user_id', $userId)->update(['is_active' => false]);
@@ -84,7 +84,7 @@ class ProfileController extends Controller
             ->where('user_id', $request->user()->id)
             ->firstOrFail();
 
-        Storage::disk('local')->delete($sig->image_path);
+        Storage::delete($sig->image_path);
         $sig->delete();
 
         return redirect()->back()->with('success', 'Tanda tangan dihapus.');
@@ -106,8 +106,7 @@ class ProfileController extends Controller
 
     public static function sigToDataUrl(string $path): string
     {
-        $disk = Storage::disk('local');
-        if (! $disk->exists($path)) {
+        if (! Storage::exists($path)) {
             return '';
         }
         $ext  = strtolower(pathinfo($path, PATHINFO_EXTENSION));
@@ -118,6 +117,6 @@ class ProfileController extends Controller
             default       => 'image/png',
         };
 
-        return "data:{$mime};base64," . base64_encode($disk->get($path));
+        return "data:{$mime};base64," . base64_encode(Storage::get($path));
     }
 }
