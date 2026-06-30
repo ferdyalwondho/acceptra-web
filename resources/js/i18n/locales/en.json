@@ -689,5 +689,13 @@
         }
       }
     }
+  },
+  "idle": {
+    "title": "Session About to Expire",
+    "description": "You have been inactive for a while. You will be logged out automatically if no action is taken.",
+    "logout_in": "Logging out in {{count}} second",
+    "logout_in_plural": "Logging out in {{count}} seconds",
+    "stay_logged_in": "Stay Logged In",
+    "logout_now": "Logout Now"
   }
 }

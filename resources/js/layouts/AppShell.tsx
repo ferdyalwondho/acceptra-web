@@ -3,6 +3,8 @@ import { Link, router, usePage } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import NotificationBell from '@/components/acceptra/NotificationBell';
+import IdleWarningDialog from '@/components/acceptra/IdleWarningDialog';
+import { useIdleTimeout } from '@/hooks/use-idle-timeout';
 import type { PageProps } from '@/types';
 import {
   LayoutDashboard, FileText, GitBranch, Users, Inbox,
@@ -120,6 +122,7 @@ export default function AppShell({ children }: PropsWithChildren) {
   const ws = workspace(user.role);
 
   const { t } = useTranslation();
+  const { showWarning, countdown, keepAlive } = useIdleTimeout();
 
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -311,6 +314,12 @@ export default function AppShell({ children }: PropsWithChildren) {
           {children}
         </main>
       </div>
+
+      <IdleWarningDialog
+        open={showWarning}
+        countdown={countdown}
+        onKeepAlive={keepAlive}
+      />
     </div>
   );
 }

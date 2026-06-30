@@ -689,5 +689,12 @@
         }
       }
     }
+  },
+  "idle": {
+    "title": "Sesi Akan Berakhir",
+    "description": "Anda tidak aktif cukup lama. Anda akan otomatis logout jika tidak ada tindakan.",
+    "logout_in": "Logout dalam {{count}} detik",
+    "stay_logged_in": "Tetap Login",
+    "logout_now": "Logout Sekarang"
   }
 }
