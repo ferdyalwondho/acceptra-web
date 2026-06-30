@@ -1,0 +1,482 @@
+<?php
+
+namespace App\Http\Controllers\Approvals;
+
+use App\Http\Controllers\Controller;
+use App\Http\Controllers\ProfileController;
+use App\Jobs\NotifyAdminsJob;
+use App\Jobs\NotifyApproverTurnJob;
+use App\Models\ApprovalStep;
+use App\Models\Document;
+use App\Models\InAppNotification;
+use App\Models\PunchlistVerification;
+use App\Models\Signature;
+use App\Services\AuditService;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Inertia\Inertia;
+use Inertia\Response;
+
+class ApprovalController extends Controller
+{
+    private const ADMIN_ROLES    = ['admin', 'super_admin'];
+    private const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth'];
+
+    private const ROLE_LABELS = [
+        'admin'                  => 'Admin Aviat',
+        'approver_ms_bo'         => 'Approver MS BO',
+        'approver_ms_rts'        => 'Approver MS RTS',
+        'approver_xls_rth_team'  => 'Approver XLS RTH Team',
+        'approver_xls_rth'       => 'Approver XLS RTH',
+    ];
+
+    // GET /approvals
+    public function index(Request $request): Response
+    {
+        $user = $request->user();
+
+        abort_if(
+            ! in_array($user->role, [...self::ADMIN_ROLES, ...self::APPROVER_ROLES]),
+            403,
+        );
+
+        if (in_array($user->role, self::ADMIN_ROLES)) {
+            $docs = Document::with(['partner', 'approvalSteps.approver'])
+                ->whereHas('approvalSteps', fn ($q) =>
+                    $q->where('level_order', 1)
+                      ->where('is_active', true)
+                      ->whereNull('approver_id')
+                )
+                ->orderByDesc('date_atp_submission')
+                ->get();
+        } else {
+            $docs = Document::with(['partner', 'approvalSteps.approver'])
+                ->whereHas('approvalSteps', fn ($q) =>
+                    $q->where('approver_id', $user->id)
+                      ->where('is_active', true)
+                )
+                ->orderByDesc('date_atp_submission')
+                ->get();
+        }
+
+        $approvals = $docs->map(fn (Document $doc) => $this->mapDocCard($doc))->values()->all();
+
+        return Inertia::render('Approvals/Index', ['approvals' => $approvals]);
+    }
+
+    // GET /approvals/history
+    public function history(Request $request): Response
+    {
+        $user = $request->user();
+
+        abort_if(! in_array($user->role, self::APPROVER_ROLES), 403);
+
+        $actionLabels = [
+            'approved'                => 'Approved',
+            'approved_with_punchlist' => 'Approved w/ Punchlist',
+            'rejected'                => 'Rejected',
+            'offline_approved'        => 'Approved',
+            'skipped'                 => 'Skipped',
+        ];
+
+        $items = Document::with(['approvalSteps'])
+            ->whereHas('approvalSteps', fn ($q) =>
+                $q->where('approver_id', $user->id)
+                  ->whereIn('status', ['approved', 'approved_with_punchlist', 'rejected', 'offline_approved', 'skipped'])
+            )
+            ->orderByDesc('date_atp_submission')
+            ->limit(100)
+            ->get()
+            ->map(function (Document $doc) use ($user, $actionLabels) {
+                $myStep = $doc->approvalSteps->firstWhere('approver_id', $user->id);
+                return [
+                    'id'         => $doc->id,
+                    'uniqueId'   => $doc->unique_id,
+                    'project'    => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+                    'sow'        => $doc->sow_name,
+                    'statusCode' => $doc->status_code,
+                    'myAction'   => $actionLabels[$myStep?->status] ?? $myStep?->status ?? '—',
+                    'myDate'     => $myStep?->action_at?->format('d M Y') ?? '—',
+                ];
+            })
+            ->values()
+            ->all();
+
+        return Inertia::render('Approvals/History', ['items' => $items]);
+    }
+
+    // GET /documents/{id}/approval
+    public function show(Request $request, string $id): Response
+    {
+        $user     = $request->user();
+        $document = Document::with([
+            'partner',
+            'approvalSteps.approver',
+            'attachments',
+            'punchlistVerifications.approver',
+        ])->findOrFail($id);
+
+        $this->authorizeApprovalAccess($user, $document);
+
+        $activeStep      = $document->approvalSteps->firstWhere('is_active', true);
+        $excelAttachment = $document->attachments->firstWhere('type', 'excel');
+
+        $canAct     = false;
+        $myStepDone = null;
+
+        if (in_array($user->role, self::ADMIN_ROLES)) {
+            $canAct = $activeStep !== null && $activeStep->level_order === 1;
+        } else {
+            $myStep = $document->approvalSteps->firstWhere('approver_id', $user->id);
+            if ($myStep) {
+                $canAct = (bool) $myStep->is_active;
+                if (! $canAct && in_array($myStep->status, ['approved', 'approved_with_punchlist', 'rejected', 'offline_approved'])) {
+                    $myStepDone = [
+                        'status'          => $myStep->status,
+                        'action_at'       => $myStep->action_at?->format('d M Y, H:i'),
+                        'punchlist_notes' => $myStep->punchlist_notes,
+                        'reject_reason'   => $myStep->reject_reason,
+                    ];
+                }
+            }
+        }
+
+        $steps = $document->approvalSteps->map(fn (ApprovalStep $s) => [
+            'id'                => $s->id,
+            'level'             => $s->level_order,
+            'role'              => self::ROLE_LABELS[$s->role] ?? $s->role,
+            'pic'               => $s->approver?->name,
+            'date'              => $s->action_at?->format('d M Y'),
+            'state'             => $this->stepState($s),
+            'requiresSignature' => $s->requires_signature,
+            'reason'            => $s->reject_reason,
+        ])->values()->all();
+
+        $doc = [
+            'id'                => $document->id,
+            'uniqueId'          => $document->unique_id,
+            'project'           => $document->link_name ?? $document->site_name_ne ?? $document->pt_index,
+            'sow'               => $document->sow_name,
+            'statusCode'        => $document->status_code,
+            'requiresSignature' => (bool) ($activeStep?->requires_signature ?? false),
+        ];
+
+        $placement = $document->template_snapshot['placement'] ?? null;
+
+        $activeSig = Signature::where('user_id', $user->id)
+            ->where('is_active', true)
+            ->first();
+
+        $props = [
+            'doc'                  => $doc,
+            'steps'                => $steps,
+            'can_act'              => $canAct,
+            'my_step_done'         => $myStepDone,
+            'user_signature_id'    => $activeSig?->id,
+            'user_signature_url'   => $activeSig ? ProfileController::sigToDataUrl($activeSig->image_path) : null,
+            'excel_attachment' => $excelAttachment ? [
+                'id'                => $excelAttachment->id,
+                'original_filename' => $excelAttachment->original_filename,
+                'file_size_bytes'   => $excelAttachment->file_size_bytes,
+            ] : null,
+            'pdf_url'          => $document->original_pdf_path
+                ? route('documents.pdf', $document->id)
+                : null,
+            'placements'       => ($placement && ! empty($placement['positions']))
+                ? $placement['positions']
+                : null,
+        ];
+
+        // Verify mode: status 15 + user has punchlist_verification for this doc
+        if ($document->status_code === '15') {
+            $myVerification = $document->punchlistVerifications
+                ->firstWhere('approver_id', $user->id);
+
+            if ($myVerification) {
+                $myStep = $document->approvalSteps
+                    ->firstWhere('id', $myVerification->approval_step_id);
+
+                $revisionPdf = $document->attachments
+                    ->where('type', 'punchlist_revision')
+                    ->sortByDesc('created_at')
+                    ->first();
+
+                $props['mode'] = 'verify';
+                $props['my_punchlist'] = $myStep ? [
+                    'notes'      => $myStep->punchlist_notes,
+                    'created_at' => $myStep->action_at?->toISOString(),
+                ] : null;
+                $props['punchlist_revision_pdf'] = $revisionPdf ? [
+                    'url'         => route('attachments.download', [
+                        'id'     => $document->id,
+                        'att_id' => $revisionPdf->id,
+                    ]),
+                    'filename'    => $revisionPdf->original_filename,
+                    'uploaded_at' => $revisionPdf->created_at->format('d M Y'),
+                    'uploaded_by' => $revisionPdf->uploader?->name ?? 'Admin',
+                ] : null;
+                $props['all_verifications'] = $document->punchlistVerifications
+                    ->map(fn (PunchlistVerification $v) => [
+                        'approver_name' => $v->approver?->name ?? '—',
+                        'status'        => $v->status,
+                        'verified_at'   => $v->verified_at?->format('d M Y'),
+                    ])->values()->all();
+            }
+        }
+
+        return Inertia::render('Approvals/Screen', $props);
+    }
+
+    // POST /documents/{id}/approve
+    public function approve(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps.approver')->findOrFail($id);
+
+        $activeStep = $document->approvalSteps->firstWhere('is_active', true);
+        abort_if(! $activeStep, 422, 'No active approval step.');
+
+        $this->authorizeStepAction($user, $activeStep);
+
+        $request->validate([
+            'action'          => ['required', 'in:approve,approve_with_punchlist'],
+            'punchlist_notes' => ['required_if:action,approve_with_punchlist', 'nullable', 'string'],
+            'signature_id'    => ['nullable', 'uuid'],
+            'signature_data'  => ['nullable', 'string'],
+        ]);
+
+        $action = $request->input('action');
+
+        $nextStep = null;
+
+        DB::transaction(function () use ($user, $document, $activeStep, $action, $request, &$nextStep) {
+            // Resolve signature: use existing ID, or save new base64 data
+            $signatureId = $request->input('signature_id');
+            if (! $signatureId && $request->filled('signature_data')) {
+                $dataUrl = $request->input('signature_data');
+                if (str_starts_with($dataUrl, 'data:image/')) {
+                    preg_match('/^data:image\/(\w+);base64,/', $dataUrl, $m);
+                    $ext     = in_array($m[1] ?? '', ['png', 'jpeg', 'jpg', 'gif', 'webp']) ? ($m[1] === 'jpeg' ? 'jpg' : $m[1]) : 'png';
+                    $decoded = base64_decode(substr($dataUrl, strpos($dataUrl, ',') + 1), strict: true);
+                    if ($decoded !== false) {
+                        $fileToken = (string) Str::uuid7();
+                        $path      = "signatures/{$user->id}/{$fileToken}.{$ext}";
+                        Storage::disk('local')->put($path, $decoded);
+                        Signature::where('user_id', $user->id)->update(['is_active' => false]);
+                        $sig         = Signature::create(['user_id' => $user->id, 'image_path' => $path, 'is_active' => true]);
+                        $signatureId = $sig->id;
+                    }
+                }
+            }
+
+            $activeStep->update([
+                'status'          => $action === 'approve' ? 'approved' : 'approved_with_punchlist',
+                'punchlist_notes' => $action === 'approve_with_punchlist' ? $request->input('punchlist_notes') : null,
+                'action_at'       => now(),
+                'is_active'       => false,
+                'signature_id'    => $signatureId,
+                'approver_id'     => $activeStep->approver_id ?? $user->id,
+            ]);
+
+            // Find next pending step
+            $nextStep = $document->approvalSteps()
+                ->where('level_order', '>', $activeStep->level_order)
+                ->where('status', 'pending')
+                ->orderBy('level_order')
+                ->first();
+
+            if ($nextStep) {
+                $nextStep->update(['is_active' => true]);
+                $advanceCode = str_pad($activeStep->level_order * 3 + 1, 2, '0', STR_PAD_LEFT);
+                $document->update(['status_code' => $advanceCode]);
+            } else {
+                // Last approver — check for any punchlist across all steps
+                $punchlistSteps = $document->approvalSteps()
+                    ->where('status', 'approved_with_punchlist')
+                    ->get();
+
+                if ($punchlistSteps->isNotEmpty()) {
+                    $aggregated = $punchlistSteps
+                        ->pluck('punchlist_notes')
+                        ->filter()
+                        ->implode("\n\n");
+
+                    $document->update([
+                        'status_code'       => '14',
+                        'date_atp_approved' => today(),
+                        'atp_punchlist'     => $aggregated,
+                    ]);
+
+                    foreach ($punchlistSteps as $step) {
+                        PunchlistVerification::create([
+                            'document_id'      => $document->id,
+                            'approval_step_id' => $step->id,
+                            'approver_id'      => $step->approver_id,
+                            'status'           => 'pending',
+                        ]);
+                    }
+                } else {
+                    $document->update([
+                        'status_code'       => '13',
+                        'date_atp_approved' => today(),
+                    ]);
+                }
+            }
+
+            $eventName = $action === 'approve_with_punchlist'
+                ? 'step.approved_with_punchlist'
+                : 'step.approved';
+
+            AuditService::log(
+                $document->id,
+                $eventName,
+                "Step L{$activeStep->level_order} {$eventName} by {$user->name}",
+                ['level' => $activeStep->level_order],
+                $user->id,
+            );
+        });
+
+        // Mark related in-app notifications as read
+        InAppNotification::where('user_id', $user->id)
+            ->where('document_id', $id)
+            ->where('is_read', false)
+            ->update(['is_read' => true, 'read_at' => now()]);
+
+        // Dispatch notifications outside transaction
+        if ($nextStep) {
+            NotifyApproverTurnJob::dispatch($document->fresh(), $nextStep);
+        } else {
+            NotifyAdminsJob::dispatch($document->fresh(), 'flow_completed');
+        }
+
+        $flash = match (true) {
+            $nextStep !== null => 'Approval recorded. Next approver has been notified.',
+            $document->fresh()->status_code === '14' => 'ATP Done with Punchlist. Admin can now upload the revised document.',
+            default => 'All approvals complete. Document is now ATP Done.',
+        };
+
+        return redirect()->route('approvals.index')->with('success', $flash);
+    }
+
+    // POST /documents/{id}/reject
+    public function reject(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps')->findOrFail($id);
+
+        $activeStep = $document->approvalSteps->firstWhere('is_active', true);
+        abort_if(! $activeStep, 422, 'No active approval step.');
+
+        $this->authorizeStepAction($user, $activeStep);
+
+        $request->validate([
+            'reject_reason' => ['required', 'string'],
+        ]);
+
+        DB::transaction(function () use ($user, $document, $activeStep, $request) {
+            $activeStep->update([
+                'status'        => 'rejected',
+                'reject_reason' => $request->input('reject_reason'),
+                'action_at'     => now(),
+                'is_active'     => false,
+                'approver_id'   => $activeStep->approver_id ?? $user->id,
+            ]);
+
+            $rejectCode = str_pad($activeStep->level_order * 3 - 1, 2, '0', STR_PAD_LEFT);
+            $document->update(['status_code' => $rejectCode]);
+
+            AuditService::log(
+                $document->id,
+                'step.rejected',
+                "Step L{$activeStep->level_order} rejected by {$user->name}: {$request->input('reject_reason')}",
+                ['level' => $activeStep->level_order],
+                $user->id,
+            );
+        });
+
+        // Mark related in-app notifications as read
+        InAppNotification::where('user_id', $user->id)
+            ->where('document_id', $id)
+            ->where('is_read', false)
+            ->update(['is_read' => true, 'read_at' => now()]);
+
+        NotifyAdminsJob::dispatch($document->fresh(), 'rejected');
+
+        return redirect()->route('approvals.index')
+            ->with('success', 'Revision rejected. Admin Aviat has been notified.');
+    }
+
+    private function authorizeApprovalAccess(object $user, Document $document): void
+    {
+        if (in_array($user->role, self::ADMIN_ROLES)) {
+            return;
+        }
+
+        if (in_array($user->role, self::APPROVER_ROLES)) {
+            $isInvolved = $document->approvalSteps
+                ->contains(fn ($step) => $step->approver_id === $user->id);
+
+            // Also allow if user has a punchlist_verification (for verify mode)
+            $hasPunchlistRecord = $document->punchlistVerifications
+                ->contains(fn ($v) => $v->approver_id === $user->id);
+
+            abort_if(! $isInvolved && ! $hasPunchlistRecord, 403);
+            return;
+        }
+
+        abort(403);
+    }
+
+    private function authorizeStepAction(object $user, ApprovalStep $step): void
+    {
+        // Admin/Super Admin can act on L1 steps (approver_id = null)
+        if (in_array($user->role, self::ADMIN_ROLES) && $step->level_order === 1) {
+            return;
+        }
+
+        // Approver can only act on their own assigned step
+        abort_if($step->approver_id !== $user->id, 403, 'Not your approval step.');
+    }
+
+    private function mapDocCard(Document $doc): array
+    {
+        return [
+            'id'          => $doc->id,
+            'uniqueId'    => $doc->unique_id,
+            'project'     => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+            'sow'         => $doc->sow_name,
+            'partner'     => $doc->partner?->name,
+            'statusCode'  => $doc->status_code,
+            'activeStep'  => ($step = $doc->approvalSteps->firstWhere('is_active', true))
+                ? 'L' . $step->level_order . ' — ' . (self::ROLE_LABELS[$step->role] ?? $step->role)
+                : null,
+            'submittedAt' => $doc->date_atp_submission
+                ? $doc->date_atp_submission->format('d M Y')
+                : $doc->created_at->format('d M Y'),
+            'approvers'   => $doc->approvalSteps
+                ->whereNotNull('approver_id')
+                ->map(fn (ApprovalStep $s) => $s->approver)
+                ->filter()
+                ->map(fn ($u) => ['name' => $u->name, 'initials' => $u->initials])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    private function stepState(ApprovalStep $s): string
+    {
+        if (in_array($s->status, ['approved', 'approved_with_punchlist', 'offline_approved', 'skipped'])) {
+            return 'done';
+        }
+        if ($s->status === 'rejected') {
+            return 'rejected';
+        }
+        if ($s->is_active) {
+            return 'active';
+        }
+        return 'pending';
+    }
+}
