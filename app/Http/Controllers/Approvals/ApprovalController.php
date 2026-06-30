@@ -264,7 +264,7 @@ class ApprovalController extends Controller
                     if ($decoded !== false) {
                         $fileToken = (string) Str::uuid7();
                         $path      = "signatures/{$user->id}/{$fileToken}.{$ext}";
-                        Storage::disk('local')->put($path, $decoded);
+                        Storage::put($path, $decoded);
                         Signature::where('user_id', $user->id)->update(['is_active' => false]);
                         $sig         = Signature::create(['user_id' => $user->id, 'image_path' => $path, 'is_active' => true]);
                         $signatureId = $sig->id;
