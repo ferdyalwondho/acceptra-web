@@ -18,6 +18,7 @@ use App\Http\Controllers\Settings\ReminderSettingController;
 use App\Http\Controllers\Users\UserController;
 use App\Http\Controllers\Users\UserInvitationController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\HelpController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -155,6 +156,9 @@ Route::middleware('auth')->group(function () {
     /* ── Settings (FR-RMD) ── */
     Route::get('/settings/reminders', [ReminderSettingController::class, 'index'])->name('settings.reminders');
     Route::put('/settings/reminders', [ReminderSettingController::class, 'update'])->name('settings.reminders.update');
+
+    /* ── Help (FR-HELP) ── */
+    Route::get('/help', [HelpController::class, 'index'])->name('help.index');
 
     /* ── Shared ── */
     Route::get('/notifications',              [NotificationController::class, 'index'])->name('notifications.index');

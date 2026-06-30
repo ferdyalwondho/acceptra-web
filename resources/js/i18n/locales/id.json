@@ -11,7 +11,8 @@
     "need_approval": "Need Approval",
     "history": "History",
     "submit_document": "Submit Document",
-    "my_documents": "My Documents"
+    "my_documents": "My Documents",
+    "help": "Bantuan"
   },
   "topbar": {
     "open_menu": "Buka menu",
@@ -536,5 +537,157 @@
     "saved_signature_hint": "Kelola saved signature untuk mempercepat proses approval.",
     "manage": "Kelola →",
     "save_changes": "Simpan Perubahan"
+  },
+  "help": {
+    "page_title": "Bantuan",
+    "heading": "Pusat Bantuan",
+    "description": "Pertanyaan yang sering diajukan dan panduan langkah demi langkah sesuai peran Anda.",
+    "tab_faq": "FAQ",
+    "tab_guide": "Panduan",
+    "faq": {
+      "aviat": {
+        "q1": "Apa perbedaan peran Super Admin, Admin, dan Viewer?",
+        "a1": "Super Admin memiliki akses penuh termasuk manajemen pengguna dan pengaturan. Admin dapat mengelola partner, dokumen, dan template. Viewer hanya bisa melihat data dan tidak dapat membuat atau mengubah apapun.",
+        "q2": "Bagaimana cara mengundang dan mengelola Partner?",
+        "a2": "Buka menu Partners di sidebar, klik Tambah Partner, isi data perusahaan, lalu simpan. Email undangan akan dikirim otomatis ke email admin partner.",
+        "q3": "Bagaimana cara membuat dan meng-clone Template SOW beserta level approval?",
+        "a3": "Buka menu Templates/SOW, klik Buat Template, tentukan level approval (L1, L2, dst.) beserta approver yang bertanggung jawab, lalu simpan. Untuk meng-clone, buka template yang sudah ada dan gunakan aksi Clone.",
+        "q4": "Bagaimana cara menambah pengguna baru dan mengirim ulang undangan?",
+        "a4": "Buka menu Users, klik Tambah User, isi data dan pilih role, lalu simpan. Untuk mengirim ulang undangan, cari user di daftar dan klik Kirim Ulang Undangan.",
+        "q5": "Bagaimana cara memantau dokumen aktif dan meng-export laporan?",
+        "a5": "Buka menu Documents untuk melihat semua dokumen beserta statusnya. Gunakan filter untuk mempersempit hasil, lalu klik Export untuk mengunduh data dalam format Excel.",
+        "q6": "Mengapa beberapa menu tidak muncul untuk role Viewer?",
+        "a6": "Role Viewer bersifat read-only. Menu untuk membuat atau mengubah data (seperti membuat dokumen atau mengelola user) disembunyikan untuk mencegah perubahan yang tidak disengaja.",
+        "q7": "Bagaimana notifikasi reminder bekerja dan bagaimana cara mengatur intervalnya?",
+        "a7": "Notifikasi reminder dikirim otomatis ke approver ketika dokumen telah menunggu persetujuan melebihi interval yang dikonfigurasi. Buka Settings → Setting Reminder (Super Admin only) untuk mengatur jumlah hari per level approval dan mengaktifkan/menonaktifkan mode hari kerja saja."
+      },
+      "partner": {
+        "q1": "Bagaimana cara mengajukan (submit) dokumen baru?",
+        "a1": "Klik Submit Dokumen di sidebar atau di dashboard. Pilih jenis dokumen, isi kolom yang diperlukan, lampirkan file yang dibutuhkan, lalu submit.",
+        "q2": "Format dan lampiran apa saja yang dibutuhkan saat submit?",
+        "a2": "PDF adalah format utama untuk dokumen. Lampiran pendukung (foto, laporan) dapat diupload dalam format PDF, JPG, atau PNG. Periksa persyaratan template untuk jenis dokumen yang bersangkutan.",
+        "q3": "Bagaimana cara mengetahui status dokumen saya?",
+        "a3": "Buka menu My Documents di sidebar. Setiap dokumen menampilkan status saat ini (mis. Menunggu, Sedang Direview, Disetujui, Ditolak). Klik dokumen untuk melihat progres lengkapnya.",
+        "q4": "Apa yang harus dilakukan jika dokumen ditolak atau diminta revisi (punchlist)?",
+        "a4": "Anda akan menerima notifikasi saat revisi diminta. Buka dokumen tersebut, tinjau komentar punchlist dari approver, lakukan koreksi yang diperlukan, lalu upload ulang.",
+        "q5": "Bagaimana cara mengunggah revisi dokumen?",
+        "a5": "Buka dokumen yang memerlukan revisi, gulir ke bagian Revisi, upload file yang sudah dikoreksi, lalu submit. Dokumen akan masuk kembali ke antrian approval."
+      },
+      "approver": {
+        "q1": "Bagaimana cara melihat dokumen yang menunggu persetujuan saya?",
+        "a1": "Klik Need Approval di sidebar. Daftar ini hanya menampilkan dokumen yang ditugaskan ke Anda pada level approval Anda dan saat ini menunggu tindakan.",
+        "q2": "Bagaimana cara approve atau reject sebuah dokumen?",
+        "a2": "Buka dokumen dari daftar Need Approval. Tinjau isi dan lampirannya, lalu klik Approve untuk menyetujui atau Reject untuk menolak. Anda dapat menambahkan komentar sebelum konfirmasi.",
+        "q3": "Bagaimana cara membubuhkan tanda tangan digital?",
+        "a3": "Saat melakukan approval, sistem akan meminta Anda memilih tanda tangan yang tersimpan. Jika belum ada, buka Profil → Saved Signature untuk menguploadnya terlebih dahulu.",
+        "q4": "Apa itu approval berjenjang (multi-level) dan bagaimana urutannya?",
+        "a4": "Dokumen melewati level approval secara berurutan (L1 → L2 → dst.) sesuai definisi template. Setiap level harus disetujui sebelum approver berikutnya mendapat notifikasi. Anda hanya bertindak pada level yang ditugaskan ke Anda.",
+        "q5": "Di mana saya bisa melihat riwayat (history) approval saya?",
+        "a5": "Klik History di sidebar untuk melihat semua dokumen yang sebelumnya telah Anda setujui atau tolak, beserta tanggal dan komentar yang pernah Anda tambahkan."
+      }
+    },
+    "guide": {
+      "aviat": {
+        "s1": {
+          "title": "Mengundang & Mengelola Partner",
+          "step1": "Buka menu Partners di sidebar.",
+          "step2": "Klik Tambah Partner dan isi nama perusahaan, email, region, dan informasi PIC.",
+          "step3": "Klik Simpan. Email undangan dikirim otomatis ke admin partner.",
+          "step4": "Untuk mengubah atau menonaktifkan partner, cari di daftar dan klik Edit."
+        },
+        "s2": {
+          "title": "Membuat Template SOW & Level Approval",
+          "step1": "Buka menu Templates/SOW dan klik Buat Template.",
+          "step2": "Tentukan nama template, jenis dokumen, dan tambahkan level approval (mis. L1 MS BO, L2 XLS RTH).",
+          "step3": "Tetapkan role approver yang bertanggung jawab untuk setiap level, lalu simpan."
+        },
+        "s3": {
+          "title": "Mengelola Pengguna (Users)",
+          "step1": "Buka menu Users dan klik Tambah User.",
+          "step2": "Isi nama, email, dan pilih role pengguna. Klik Simpan.",
+          "step3": "Untuk mengirim ulang undangan, cari user di daftar dan klik Kirim Ulang Undangan."
+        },
+        "s4": {
+          "title": "Memantau & Meng-export Dokumen",
+          "step1": "Buka menu Documents untuk melihat semua dokumen dan statusnya.",
+          "step2": "Gunakan filter (status, partner, rentang tanggal) untuk mempersempit daftar.",
+          "step3": "Klik Export untuk mengunduh hasil filter dalam format Excel."
+        },
+        "s5": {
+          "title": "Submit New Request (Dokumen Baru)",
+          "step1": "Buka menu Documents dan klik Submit Document (atau Create).",
+          "step2": "Pilih Partner, jenis Template/SOW, isi detail kontrak (nomor, lingkup, tanggal), dan tetapkan PIC.",
+          "step3": "Upload dokumen PDF utama dan lampiran pendukung yang diperlukan.",
+          "step4": "Klik Submit. Dokumen masuk ke antrian approval di L1 dan approver terkait mendapat notifikasi."
+        },
+        "s6": {
+          "title": "Submit Ongoing Document (Import)",
+          "step1": "Buka menu Documents dan klik Import.",
+          "step2": "Isi detail dokumen termasuk tahap approval saat ini dan status yang mencerminkan progres nyata di lapangan.",
+          "step3": "Upload file PDF dokumen yang sudah ada.",
+          "step4": "Klik Submit. Dokumen tercatat di sistem pada tahap yang ditentukan, melewati level approval sebelumnya."
+        },
+        "s7": {
+          "title": "Reassign Dokumen",
+          "step1": "Buka dokumen yang perlu di-reassign dari daftar Documents.",
+          "step2": "Klik aksi Reassign (tersedia untuk Admin dan Super Admin).",
+          "step3": "Pilih approver atau PIC partner baru yang bertanggung jawab dan konfirmasi. Alur dokumen dilanjutkan dari tahap saat ini di bawah assignee baru."
+        },
+        "s8": {
+          "title": "Setting Reminder",
+          "step1": "Buka Settings → Setting Reminder di sidebar (Super Admin only).",
+          "step2": "Untuk setiap level approval (L1, L2, dst.) atur jumlah hari setelah berapa lama email reminder dikirim ke approver.",
+          "step3": "Aktifkan Weekday Only untuk membatasi reminder hanya pada hari kerja (Senin–Jumat). Klik Simpan."
+        },
+        "s9": {
+          "title": "L1 Approval (Review Admin)",
+          "step1": "Klik L1 Approvals di sidebar. Badge menunjukkan jumlah dokumen yang menunggu.",
+          "step2": "Buka dokumen untuk meninjau isi, file lampiran, dan detail pengiriman.",
+          "step3": "Klik Approve untuk meneruskan dokumen ke level approval berikutnya, atau Reject untuk mengembalikannya ke partner.",
+          "step4": "Tambahkan komentar jika diperlukan, lalu konfirmasi. Partner dan approver berikutnya mendapat notifikasi secara otomatis."
+        }
+      },
+      "partner": {
+        "s1": {
+          "title": "Submit Dokumen Baru",
+          "step1": "Klik Submit Dokumen di sidebar atau shortcut di dashboard.",
+          "step2": "Pilih jenis dokumen dan isi semua kolom yang diperlukan (nomor kontrak, lingkup, tanggal).",
+          "step3": "Upload PDF utama dan lampiran pendukung yang dibutuhkan.",
+          "step4": "Klik Submit. Anda akan mendapat konfirmasi dan dokumen masuk ke antrian approval."
+        },
+        "s2": {
+          "title": "Melacak Status di My Documents",
+          "step1": "Klik My Documents di sidebar.",
+          "step2": "Setiap baris menampilkan nama dokumen, tanggal pengiriman, dan status saat ini.",
+          "step3": "Klik dokumen untuk melihat progres approval lengkap, termasuk level yang sedang aktif."
+        },
+        "s3": {
+          "title": "Menangani Revisi / Punchlist",
+          "step1": "Anda akan menerima notifikasi saat revisi diminta. Klik notifikasi untuk membuka dokumen.",
+          "step2": "Tinjau komentar punchlist dari approver yang menjelaskan apa yang perlu dikoreksi.",
+          "step3": "Upload file yang sudah dikoreksi di bagian Revisi, lalu klik Submit Revisi."
+        }
+      },
+      "approver": {
+        "s1": {
+          "title": "Meninjau Antrian Need Approval",
+          "step1": "Klik Need Approval di sidebar untuk melihat semua dokumen yang ditugaskan ke Anda.",
+          "step2": "Angka badge menunjukkan berapa banyak dokumen yang menunggu tindakan Anda.",
+          "step3": "Klik dokumen untuk membuka tampilan detail dan meninjau semua isi serta lampiran."
+        },
+        "s2": {
+          "title": "Approve atau Reject dengan Tanda Tangan",
+          "step1": "Buka dokumen dari daftar Need Approval.",
+          "step2": "Tinjau semua tab (detail dokumen, lampiran, audit trail).",
+          "step3": "Klik Approve atau Reject. Jika menyetujui, pilih tanda tangan tersimpan Anda dari dropdown.",
+          "step4": "Tambahkan komentar jika perlu, lalu konfirmasi. Dokumen akan lanjut ke level berikutnya atau selesai."
+        },
+        "s3": {
+          "title": "Melihat Riwayat Approval",
+          "step1": "Klik History di sidebar.",
+          "step2": "Lihat semua dokumen yang sebelumnya telah Anda setujui atau tolak, lengkap dengan waktu dan komentar."
+        }
+      }
+    }
   }
 }
