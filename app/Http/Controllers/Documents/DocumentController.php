@@ -323,7 +323,7 @@ class DocumentController extends Controller
             'pdf_file' => ['required', 'file', 'mimes:pdf', 'max:20480'],
         ]);
 
-        $pdfPath = $request->file('pdf_file')->store('documents/punchlist-revisions', 'local');
+        $pdfPath = $request->file('pdf_file')->store('documents/punchlist-revisions');
 
         DB::transaction(function () use ($user, $document, $pdfPath, $request) {
             DocumentAttachment::create([
@@ -369,11 +369,11 @@ class DocumentController extends Controller
 
         if ($request->hasFile('pdf_file')) {
             $file    = $request->file('pdf_file');
-            $pdfPath = $file->store('documents/pdf', 'local');
+            $pdfPath = $file->store('documents/pdf');
         }
 
         if ($request->hasFile('excel_file')) {
-            $excelPath = $request->file('excel_file')->store('documents/excel', 'local');
+            $excelPath = $request->file('excel_file')->store('documents/excel');
         }
 
         $document = null;
@@ -531,13 +531,13 @@ class DocumentController extends Controller
         $pdfPath = $document->original_pdf_path;
 
         if ($request->hasFile('pdf_file')) {
-            $pdfPath = $request->file('pdf_file')->store('documents/pdf', 'local');
+            $pdfPath = $request->file('pdf_file')->store('documents/pdf');
         }
 
         if ($request->hasFile('excel_file')) {
             // Replace existing excel attachment if any
             $document->attachments()->where('type', 'excel')->delete();
-            $excelPath = $request->file('excel_file')->store('documents/excel', 'local');
+            $excelPath = $request->file('excel_file')->store('documents/excel');
 
             DocumentAttachment::create([
                 'document_id'       => $document->id,
@@ -747,7 +747,7 @@ class DocumentController extends Controller
         }
 
         // ── 3. File uploads (before transaction) ────────────────────────────
-        $pdfPath = $request->file('pdf_file')->store('documents/pdf', 'local');
+        $pdfPath = $request->file('pdf_file')->store('documents/pdf');
 
         // Key evidence paths by level_order to survive sorting
         $evidencePaths = [];
@@ -755,7 +755,7 @@ class DocumentController extends Controller
             if ($request->hasFile("levels.{$idx}.evidence_file")) {
                 $file = $request->file("levels.{$idx}.evidence_file");
                 $evidencePaths[(int) $levelInput['level_order']] = [
-                    'path'     => $file->store('documents/evidence', 'local'),
+                    'path'     => $file->store('documents/evidence'),
                     'filename' => $file->getClientOriginalName(),
                     'size'     => $file->getSize(),
                 ];
