@@ -11,7 +11,8 @@
     "need_approval": "Need Approval",
     "history": "History",
     "submit_document": "Submit Document",
-    "my_documents": "My Documents"
+    "my_documents": "My Documents",
+    "help": "Help"
   },
   "topbar": {
     "open_menu": "Open menu",
@@ -536,5 +537,157 @@
     "saved_signature_hint": "Manage your saved signature to speed up the approval process.",
     "manage": "Manage →",
     "save_changes": "Save Changes"
+  },
+  "help": {
+    "page_title": "Help",
+    "heading": "Help Center",
+    "description": "Frequently asked questions and step-by-step guides for your role.",
+    "tab_faq": "FAQ",
+    "tab_guide": "User Guide",
+    "faq": {
+      "aviat": {
+        "q1": "What is the difference between Super Admin, Admin, and Viewer roles?",
+        "a1": "Super Admin has full access including user and settings management. Admin can manage partners, documents, and templates. Viewer has read-only access and cannot create or modify data.",
+        "q2": "How do I invite and manage Partners?",
+        "a2": "Go to Partners in the sidebar, click Add Partner, fill in the company details, and save. An invitation email will be sent automatically to the partner's admin email.",
+        "q3": "How do I create and clone a SOW Template with approval levels?",
+        "a3": "Go to Templates/SOW, click Create Template, define the approval levels (L1, L2, etc.) with the responsible approvers, and save. To clone, open an existing template and use the Clone action.",
+        "q4": "How do I add a new user and resend their invitation?",
+        "a4": "Go to Users, click Add User, fill in the details and assign a role, then save. To resend an invitation, find the user in the list and click Resend Invitation.",
+        "q5": "How do I monitor active documents and export a report?",
+        "a5": "Go to Documents to see all documents with their current status. Use the filters to narrow down results, then click Export to download the data as an Excel file.",
+        "q6": "Why are some menu items not visible for the Viewer role?",
+        "a6": "The Viewer role is read-only. Menus for creating or modifying data (such as creating documents or managing users) are hidden to prevent unintended changes.",
+        "q7": "How do reminder notifications work and how do I configure them?",
+        "a7": "Reminder notifications are sent automatically to approvers when a document has been waiting for approval beyond the configured interval. Go to Settings → Setting Reminder (Super Admin only) to set the number of days per approval level and toggle weekday-only mode on or off."
+      },
+      "partner": {
+        "q1": "How do I submit a new document?",
+        "a1": "Click Submit Document in the sidebar or on the dashboard. Select the document type, fill in the required fields, attach the necessary files, and submit.",
+        "q2": "What formats and attachments are required when submitting?",
+        "a2": "PDF is the required format for the main document. Supporting attachments (photos, reports) can be uploaded as PDF, JPG, or PNG. Check the template requirements for the specific document type.",
+        "q3": "How do I check the status of my document?",
+        "a3": "Go to My Documents in the sidebar. Each document shows its current status (e.g., Pending, Under Review, Approved, Rejected). Click a document to see detailed progress.",
+        "q4": "What should I do if my document is rejected or requires a revision (punchlist)?",
+        "a4": "You will receive a notification when a revision is requested. Open the document, review the punchlist comments from the approver, make the necessary corrections, and re-upload.",
+        "q5": "How do I upload a document revision?",
+        "a5": "Open the document that requires revision, scroll to the Revision section, upload the corrected file, and submit. The document will re-enter the approval queue."
+      },
+      "approver": {
+        "q1": "How do I see documents waiting for my approval?",
+        "a1": "Click Need Approval in the sidebar. This list shows only documents assigned to you at your approval level that are currently waiting for action.",
+        "q2": "How do I approve or reject a document?",
+        "a2": "Open the document from the Need Approval list. Review the content and attachments, then click Approve to accept or Reject to decline. You can add a comment before confirming.",
+        "q3": "How do I attach my digital signature?",
+        "a3": "When approving, the system will prompt you to select a saved signature. If you have not saved one yet, go to your Profile → Saved Signature to upload it first.",
+        "q4": "What is multi-level approval and how does the order work?",
+        "a4": "Documents go through sequential approval levels (L1 → L2 → etc.) as defined in the template. Each level must be approved before the next approver is notified. You only act at your assigned level.",
+        "q5": "Where can I see my approval history?",
+        "a5": "Click History in the sidebar to see all documents you have previously approved or rejected, along with the date and any comments."
+      }
+    },
+    "guide": {
+      "aviat": {
+        "s1": {
+          "title": "Inviting & Managing Partners",
+          "step1": "Go to Partners in the sidebar.",
+          "step2": "Click Add Partner and fill in the company name, email, region, and PIC information.",
+          "step3": "Click Save. An invitation email is sent automatically to the partner admin.",
+          "step4": "To edit or deactivate a partner, find them in the list and click Edit."
+        },
+        "s2": {
+          "title": "Creating a SOW Template & Approval Levels",
+          "step1": "Go to Templates/SOW and click Create Template.",
+          "step2": "Define the template name, document type, and add approval levels (e.g., L1 MS BO, L2 XLS RTH).",
+          "step3": "Assign the responsible approver role for each level and save."
+        },
+        "s3": {
+          "title": "Managing Users",
+          "step1": "Go to Users and click Add User.",
+          "step2": "Fill in the user's name, email, and assign a role. Click Save.",
+          "step3": "To resend an invitation, find the user in the list and click Resend Invitation."
+        },
+        "s4": {
+          "title": "Monitoring & Exporting Documents",
+          "step1": "Go to Documents to view all documents and their current statuses.",
+          "step2": "Use filters (status, partner, date range) to narrow down the list.",
+          "step3": "Click Export to download the filtered results as an Excel file."
+        },
+        "s5": {
+          "title": "Submit New Request (New Document)",
+          "step1": "Go to Documents and click Submit Document (or Create).",
+          "step2": "Select the Partner, Template/SOW type, fill in the contract details (number, scope, dates), and assign the PIC.",
+          "step3": "Upload the required PDF document and any supporting attachments.",
+          "step4": "Click Submit. The document enters the approval queue at L1 and the relevant approver is notified."
+        },
+        "s6": {
+          "title": "Submit Ongoing Document (Import)",
+          "step1": "Go to Documents and click Import.",
+          "step2": "Fill in the document details including current approval stage and status to reflect the real-world progress.",
+          "step3": "Upload the existing PDF document.",
+          "step4": "Click Submit. The document is recorded in the system at the indicated stage, bypassing earlier approval levels."
+        },
+        "s7": {
+          "title": "Reassign Document",
+          "step1": "Open the document that needs to be reassigned from the Documents list.",
+          "step2": "Click the Reassign action (available to Admin and Super Admin).",
+          "step3": "Select the new responsible approver or partner PIC and confirm. The document workflow continues from the current stage under the new assignee."
+        },
+        "s8": {
+          "title": "Setting Reminder",
+          "step1": "Go to Settings → Setting Reminder in the sidebar (Super Admin only).",
+          "step2": "For each approval level (L1, L2, etc.) set the number of days after which a reminder email is sent to the approver.",
+          "step3": "Toggle Weekday Only on to restrict reminders to business days (Monday–Friday). Click Save."
+        },
+        "s9": {
+          "title": "L1 Approval (Admin Review)",
+          "step1": "Click L1 Approvals in the sidebar. The badge shows the number of documents waiting.",
+          "step2": "Open a document to review its content, attached files, and submission details.",
+          "step3": "Click Approve to forward the document to the next approval level, or Reject to return it to the partner.",
+          "step4": "Add a comment if needed, then confirm. The partner and next approver are notified automatically."
+        }
+      },
+      "partner": {
+        "s1": {
+          "title": "Submitting a New Document",
+          "step1": "Click Submit Document in the sidebar or the dashboard shortcut.",
+          "step2": "Select the document type and fill in all required fields (contract number, scope, dates).",
+          "step3": "Upload the main PDF and any required supporting attachments.",
+          "step4": "Click Submit. You will receive a confirmation and the document will enter the approval queue."
+        },
+        "s2": {
+          "title": "Tracking Status in My Documents",
+          "step1": "Click My Documents in the sidebar.",
+          "step2": "Each row shows the document name, submission date, and current status.",
+          "step3": "Click a document to see the full approval progress, including which level is currently active."
+        },
+        "s3": {
+          "title": "Handling a Revision / Punchlist",
+          "step1": "You will receive a notification when a revision is requested. Click the notification to open the document.",
+          "step2": "Review the punchlist comments left by the approver explaining what needs to be corrected.",
+          "step3": "Upload the corrected file in the Revision section and click Submit Revision."
+        }
+      },
+      "approver": {
+        "s1": {
+          "title": "Reviewing the Need Approval Queue",
+          "step1": "Click Need Approval in the sidebar to see all documents assigned to you.",
+          "step2": "The badge number shows how many documents are waiting for your action.",
+          "step3": "Click a document to open the detail view and review all content and attachments."
+        },
+        "s2": {
+          "title": "Approving or Rejecting with a Signature",
+          "step1": "Open a document from the Need Approval list.",
+          "step2": "Review all tabs (document details, attachments, audit trail).",
+          "step3": "Click Approve or Reject. If approving, select your saved signature from the dropdown.",
+          "step4": "Optionally add a comment, then confirm. The document moves to the next approval level or is completed."
+        },
+        "s3": {
+          "title": "Viewing Approval History",
+          "step1": "Click History in the sidebar.",
+          "step2": "Browse all documents you have previously approved or rejected, with timestamps and your comments."
+        }
+      }
+    }
   }
 }

@@ -231,7 +231,8 @@ class DocumentController extends Controller
             abort_if($document->submitted_by !== $user->id, 403);
         }
         abort_if($isPunchlistRevision && ! $isAdmin, 403);
-        abort_if(! $isPunchlistRevision && $document->status_code !== 'draft', 422);
+        // Partners can only edit their own draft; admins can open edit for any non-punchlist document (e.g. rejected)
+        abort_if(! $isPunchlistRevision && ! $isAdmin && $document->status_code !== 'draft', 422);
 
         // Punchlist revision mode: return simplified props
         if ($isPunchlistRevision) {
@@ -523,9 +524,15 @@ class DocumentController extends Controller
             abort_if($document->submitted_by !== $user->id, 403);
         }
 
-        abort_if($document->status_code !== 'draft', 422, 'Only draft documents can be submitted via revise.');
+        $isAdmin = in_array($user->role, self::ADMIN_ROLES);
 
-        $isAdmin   = in_array($user->role, self::ADMIN_ROLES);
+        // Rejection codes follow level_order * 3 - 1 (02=L1, 05=L2, 08=L3, 11=L4)
+        $isRejected = (bool) preg_match('/^(02|05|08|11)$/', $document->status_code ?? '');
+        abort_if(
+            $document->status_code !== 'draft' && ! ($isAdmin && $isRejected),
+            422,
+            'Document cannot be revised in its current state.'
+        );
         $validated = $this->validateSubmission($request, false, $isAdmin);
 
         $pdfPath = $document->original_pdf_path;
@@ -549,42 +556,58 @@ class DocumentController extends Controller
             ]);
         }
 
-        $l2Step = null;
+        // For rejected documents, determine which level to resume from.
+        // Rejection codes follow level_order * 3 - 1 (02=L1, 05=L2, 08=L3, 11=L4).
+        $rejectionLevel = null;
+        if ($isRejected) {
+            $rejectionLevel = (int) (((int) ltrim($document->status_code, '0') + 1) / 3);
+        }
 
-        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, &$l2Step) {
+        $nextActiveStep = null;
+
+        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $rejectionLevel, &$nextActiveStep) {
             $template = Template::with('levels')->findOrFail($validated['template_id']);
             $snapshot = $this->buildSnapshot($template, ['status' => 'pending', 'positions' => null]);
             $pics     = $validated['pics'] ?? [];
 
             $document->update([
-                'pt_index'           => $validated['pt_index'],
-                'link_id'            => $validated['link_id'] ?? null,
-                'link_name'          => $validated['link_name'] ?? null,
-                'project_code'       => $validated['project_code'] ?? null,
-                'vendor_contractor'  => $validated['vendor_contractor'],
-                'template_id'        => $template->id,
-                'template_snapshot'  => $snapshot,
-                'sow_name'           => $template->name,
-                'tower_id_ne'        => $validated['tower_id_ne'] ?? null,
-                'site_name_ne'       => $validated['site_name_ne'] ?? null,
-                'tower_id_fe'        => $validated['tower_id_fe'] ?? null,
-                'site_name_fe'       => $validated['site_name_fe'] ?? null,
-                'original_pdf_path'  => $pdfPath,
-                'status_code'        => '01',
+                'pt_index'            => $validated['pt_index'],
+                'link_id'             => $validated['link_id'] ?? null,
+                'link_name'           => $validated['link_name'] ?? null,
+                'project_code'        => $validated['project_code'] ?? null,
+                'vendor_contractor'   => $validated['vendor_contractor'],
+                'template_id'         => $template->id,
+                'template_snapshot'   => $snapshot,
+                'sow_name'            => $template->name,
+                'tower_id_ne'         => $validated['tower_id_ne'] ?? null,
+                'site_name_ne'        => $validated['site_name_ne'] ?? null,
+                'tower_id_fe'         => $validated['tower_id_fe'] ?? null,
+                'site_name_fe'        => $validated['site_name_fe'] ?? null,
+                'original_pdf_path'   => $pdfPath,
+                'status_code'         => '01',
                 'date_atp_submission' => now()->toDateString(),
             ]);
 
-            // Rebuild approval steps
+            // Rebuild approval steps.
+            // When resuming from a rejection level, levels before it are auto-approved
+            // so the flow continues from where it was rejected.
             $document->approvalSteps()->delete();
             foreach ($template->levels as $level) {
+                $n            = $level->level_order;
+                $autoApproved = $rejectionLevel !== null && $n < $rejectionLevel;
+                $isActive     = $rejectionLevel !== null
+                    ? $n === $rejectionLevel
+                    : $n === 1;
+
                 ApprovalStep::create([
                     'document_id'        => $document->id,
-                    'level_order'        => $level->level_order,
+                    'level_order'        => $n,
                     'role'               => $level->role,
                     'requires_signature' => $level->requires_signature,
-                    'approver_id'        => $level->level_order === 1 ? null : ($pics[$level->level_order] ?? null),
-                    'status'             => 'pending',
-                    'is_active'          => $level->level_order === 1,
+                    'approver_id'        => $n === 1 ? null : ($pics[$n] ?? null),
+                    'status'             => $autoApproved ? 'approved' : 'pending',
+                    'action_at'          => $autoApproved ? now() : null,
+                    'is_active'          => $isActive,
                 ]);
             }
 
@@ -596,17 +619,38 @@ class DocumentController extends Controller
                 $user->id,
             );
 
-            if ($isAdmin) {
+            if ($rejectionLevel !== null) {
+                // Resume from the rejected level.
+                // Pending-at-L(n) status code = advance code of L(n-1) = (n-1)*3+1, except L1 = '01'.
+                $pendingCode = $rejectionLevel === 1
+                    ? '01'
+                    : str_pad(($rejectionLevel - 1) * 3 + 1, 2, '0', STR_PAD_LEFT);
+
+                $document->update(['status_code' => $pendingCode]);
+
+                $nextActiveStep = ApprovalStep::where('document_id', $document->id)
+                    ->where('level_order', $rejectionLevel)
+                    ->first();
+
+                AuditService::log(
+                    $document->id,
+                    'document.revision_resubmitted',
+                    "Revision resubmitted by {$user->name}. Resuming from L{$rejectionLevel}.",
+                    ['resumed_from_level' => $rejectionLevel],
+                    $user->id,
+                );
+            } elseif ($isAdmin) {
+                // Normal admin submit — auto-approve L1 and activate L2.
                 ApprovalStep::where('document_id', $document->id)
                     ->where('level_order', 1)
                     ->update(['status' => 'approved', 'action_at' => now(), 'is_active' => false]);
 
-                $l2Step = ApprovalStep::where('document_id', $document->id)
+                $nextActiveStep = ApprovalStep::where('document_id', $document->id)
                     ->where('level_order', 2)
                     ->first();
 
-                if ($l2Step) {
-                    $l2Step->update(['is_active' => true]);
+                if ($nextActiveStep) {
+                    $nextActiveStep->update(['is_active' => true]);
                 }
 
                 $document->update(['status_code' => '04']);
@@ -621,16 +665,25 @@ class DocumentController extends Controller
             }
         });
 
-        if ($isAdmin) {
+        if ($rejectionLevel !== null) {
+            // Notify the approver at the level resuming from
+            if ($nextActiveStep) {
+                NotifyApproverTurnJob::dispatch($document->fresh(), $nextActiveStep);
+            }
+        } elseif ($isAdmin) {
             NotifyAdminsJob::dispatch($document, 'approved');
-            if ($l2Step) {
-                NotifyApproverTurnJob::dispatch($document, $l2Step);
+            if ($nextActiveStep) {
+                NotifyApproverTurnJob::dispatch($document->fresh(), $nextActiveStep);
             }
         } else {
             NotifyAdminsJob::dispatch($document, 'submission');
         }
 
-        $flash = $isAdmin ? 'Document submitted and L1 auto-approved.' : 'Document submitted successfully.';
+        $flash = match (true) {
+            $rejectionLevel !== null => "Revision resubmitted. Resumed from L{$rejectionLevel} approval.",
+            $isAdmin                 => 'Document submitted and L1 auto-approved.',
+            default                  => 'Document submitted successfully.',
+        };
 
         return redirect()->route('documents.show', $document->id)
             ->with('status', $flash);
