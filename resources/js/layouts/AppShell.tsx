@@ -7,7 +7,7 @@ import type { PageProps } from '@/types';
 import {
   LayoutDashboard, FileText, GitBranch, Users, Inbox,
   History, Handshake, Settings, ChevronLeft, ChevronRight,
-  Globe, Menu, UserCircle, PenLine, LogOut,
+  Globe, Menu, UserCircle, PenLine, LogOut, HelpCircle,
 } from 'lucide-react';
 
 interface NavItem {
@@ -38,22 +38,22 @@ function aviatNav(role: string, l1Badge: number, t: (k: string) => string): NavI
     { label: t('nav.partners'),      icon: <Handshake className="h-4.5 w-4.5" />,       href: '/partners',    roles: ['super_admin', 'admin', 'viewer'] },
     { label: t('nav.templates_sow'), icon: <GitBranch className="h-4.5 w-4.5" />,       href: '/templates',   roles: ['super_admin', 'admin', 'viewer'] },
     { label: t('nav.users'),         icon: <Users className="h-4.5 w-4.5" />,           href: '/users',       roles: ['super_admin'] },
-    { label: t('nav.settings'),      icon: <Settings className="h-4.5 w-4.5" />,        href: '/settings/reminders', roles: ['super_admin'] },
+    { label: t('nav.settings'),      icon: <Settings    className="h-4.5 w-4.5" />,       href: '/settings/reminders', roles: ['super_admin'] },
   ].filter((item) => !item.roles || item.roles.includes(role));
 }
 
 function partnerNav(t: (k: string) => string): NavItem[] {
   return [
     { label: t('nav.dashboard'),    icon: <LayoutDashboard className="h-4.5 w-4.5" />, href: '/dashboard' },
-    { label: t('nav.my_documents'), icon: <FileText className="h-4.5 w-4.5" />,        href: '/documents?scope=mine' },
+    { label: t('nav.my_documents'), icon: <FileText        className="h-4.5 w-4.5" />, href: '/documents?scope=mine' },
   ];
 }
 
 function approverNav(badge: number, t: (k: string) => string): NavItem[] {
   return [
     { label: t('nav.dashboard'),     icon: <LayoutDashboard className="h-4.5 w-4.5" />, href: '/dashboard' },
-    { label: t('nav.need_approval'), icon: <Inbox className="h-4.5 w-4.5" />,           href: '/approvals', badge, exact: true },
-    { label: t('nav.history'),       icon: <History className="h-4.5 w-4.5" />,         href: '/approvals/history' },
+    { label: t('nav.need_approval'), icon: <Inbox           className="h-4.5 w-4.5" />, href: '/approvals', badge, exact: true },
+    { label: t('nav.history'),       icon: <History         className="h-4.5 w-4.5" />, href: '/approvals/history' },
   ];
 }
 
@@ -175,6 +175,15 @@ export default function AppShell({ children }: PropsWithChildren) {
           <NavLink key={item.href} item={item} collapsed={collapsed} allItems={navItems} />
         ))}
       </nav>
+
+      {/* Help — pinned above collapse toggle */}
+      <div className="border-t border-[var(--color-border)] px-2 py-2">
+        <NavLink
+          item={{ label: t('nav.help'), icon: <HelpCircle className="h-4.5 w-4.5" />, href: '/help' }}
+          collapsed={collapsed}
+          allItems={[]}
+        />
+      </div>
 
       {/* Collapse toggle (desktop) */}
       <div className="hidden border-t border-[var(--color-border)] p-2 md:block">
