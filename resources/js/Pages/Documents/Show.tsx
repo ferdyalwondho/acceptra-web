@@ -54,6 +54,55 @@ const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong
 
 /* ── Manual Placement Panel ─────────────────────────────────────────────── */
 
+type Pos = { x: number; y: number; width: number; height: number };
+
+const OVERLAY_TYPE_META: Record<string, { short: string }> = {
+  sig:       { short: 'TTD' },
+  name:      { short: 'Nama' },
+  submitted: { short: 'Tgl Submit' },
+  status:    { short: 'Status' },
+  punchlist: { short: 'Punchlist' },
+  atpdate:   { short: 'Tgl ATP' },
+};
+
+const PLACEMENT_MARGIN_BOTTOM = 30;
+const PLACEMENT_LEVEL_BLOCK_H = 140;
+const PLACEMENT_NAME_GAP      = 80;
+const PLACEMENT_DOC_ROW_H     = 28;
+const PLACEMENT_DOC_GAP       = 36;
+const PLACEMENT_DOC_COL_X     = 220;
+
+function buildDefaultPositions(
+  placementLevels: TemplateLevelRecord[],
+  pageHeight: number,
+): Record<string, Pos> {
+  const init: Record<string, Pos> = {};
+
+  // Kolom 1: sig/name per level approval, anchor ke bawah halaman
+  const levelStackH = placementLevels.length * PLACEMENT_LEVEL_BLOCK_H;
+  const col1Top = Math.max(10, pageHeight - PLACEMENT_MARGIN_BOTTOM - levelStackH);
+  placementLevels.forEach((l, i) => {
+    const baseY = col1Top + i * PLACEMENT_LEVEL_BLOCK_H;
+    init[`${l.level_order}_sig`]  = { x: 20, y: baseY,                        width: 160, height: 70 };
+    init[`${l.level_order}_name`] = { x: 20, y: baseY + PLACEMENT_NAME_GAP,   width: 160, height: 28 };
+  });
+
+  // Kolom 2: overlay milik dokumen (bukan per-level), anchor ke bawah halaman
+  const docKeys: Array<[string, number]> = [
+    ['doc_submitted', 160],
+    ['doc_status',    260],
+    ['doc_punchlist', 220],
+    ['doc_atpdate',   160],
+  ];
+  const docStackH = docKeys.length * PLACEMENT_DOC_GAP;
+  const col2Top = Math.max(10, pageHeight - PLACEMENT_MARGIN_BOTTOM - docStackH);
+  docKeys.forEach(([key, w], i) => {
+    init[key] = { x: PLACEMENT_DOC_COL_X, y: col2Top + i * PLACEMENT_DOC_GAP, width: w, height: PLACEMENT_DOC_ROW_H };
+  });
+
+  return init;
+}
+
 interface PlacementPanelProps {
   pdfUrl: string;
   levels: TemplateLevelRecord[];
@@ -71,20 +120,11 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
   const [canvasH,   setCanvasH]   = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  type Pos = { x: number; y: number; width: number; height: number };
-
   // Only L2+ get placement boxes; L1 is auto-approved
   const placementLevels = levels.filter(l => l.level_order > 1);
 
-  const [positions, setPositions] = useState<Record<string, Pos>>(() => {
-    const init: Record<string, Pos> = {};
-    placementLevels.forEach((l, i) => {
-      const baseY = 40 + i * 140;
-      init[`${l.level_order}_sig`]  = { x: 20, y: baseY,      width: 160, height: 70 };
-      init[`${l.level_order}_name`] = { x: 20, y: baseY + 80, width: 160, height: 28 };
-    });
-    return init;
-  });
+  const [positions, setPositions] = useState<Record<string, Pos>>({});
+  const defaultsSeeded = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +148,11 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
         canvas.height = vp.height;
         setCanvasH(vp.height);
 
+        if (!defaultsSeeded.current) {
+          defaultsSeeded.current = true;
+          setPositions(buildDefaultPositions(placementLevels, vp.height));
+        }
+
         await page.render({ canvas, viewport: vp }).promise;
         if (!cancelled) setReady(true);
       } catch (err) {
@@ -115,6 +160,7 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
       }
     })();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfUrl]);
 
   const startDrag = (key: string, e: React.MouseEvent) => {
@@ -219,8 +265,10 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
 
           {ready && Object.entries(positions).map(([key, pos]) => {
             const [lo, type] = key.split('_');
-            const lvl   = levels.find(l => String(l.level_order) === lo);
+            const isDocLevel = lo === 'doc';
+            const lvl   = isDocLevel ? undefined : levels.find(l => String(l.level_order) === lo);
             const isSig = type === 'sig';
+            const meta  = OVERLAY_TYPE_META[type] ?? { short: type };
             const minDim  = Math.min(pos.width, pos.height);
             const fontSize    = Math.max(7, minDim * 0.2);
             const subFontSize = Math.max(6, minDim * 0.14);
@@ -240,14 +288,16 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
                   style={{ fontSize, lineHeight: 1 }}
                   className={cn('font-bold text-center px-1 truncate max-w-full', isSig ? 'text-brand-ink' : 'text-ming')}
                 >
-                  {isSig ? 'TTD' : 'Nama'} L{lo}
+                  {meta.short}{isDocLevel ? '' : ` L${lo}`}
                 </span>
-                <span
-                  style={{ fontSize: subFontSize, lineHeight: 1 }}
-                  className="text-center text-[var(--color-text-tertiary)] mt-0.5 px-1 truncate max-w-full"
-                >
-                  {ROLE_LABELS[lvl?.role ?? ''] ?? lvl?.role}
-                </span>
+                {!isDocLevel && (
+                  <span
+                    style={{ fontSize: subFontSize, lineHeight: 1 }}
+                    className="text-center text-[var(--color-text-tertiary)] mt-0.5 px-1 truncate max-w-full"
+                  >
+                    {ROLE_LABELS[lvl?.role ?? ''] ?? lvl?.role}
+                  </span>
+                )}
                 {/* Resize handle */}
                 <div
                   onMouseDown={(e) => startResize(key, e)}

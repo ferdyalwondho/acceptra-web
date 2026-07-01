@@ -26,6 +26,7 @@ export interface AuthUser {
   role: string;
   initials: string;
   preferred_language: 'id' | 'en';
+  has_seen_get_started: boolean;
 }
 
 export interface PageProps {
@@ -34,6 +35,7 @@ export interface PageProps {
   unreadNotifications?: number;
   recentNotifications?: NotificationRecord[];
   l1PendingCount?: number;
+  show_get_started_modal?: boolean;
   flash?: { success?: string; error?: string };
   [key: string]: unknown;
 }

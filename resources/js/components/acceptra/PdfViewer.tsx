@@ -23,6 +23,12 @@ const SAVE_SCALE = 1.4;
 const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.4, 1.6, 2.0, 2.5, 3.0];
 const DEFAULT_ZOOM_IDX = 4; // 1.4
 
+const OVERLAY_LABELS: Record<string, string> = {
+  sig: 'TTD', name: 'Nama',
+  submitted: 'Tgl Submit', status: 'Status',
+  punchlist: 'Punchlist', atpdate: 'Tgl ATP',
+};
+
 export default function PdfViewer({ url, placements, className }: Props) {
   const scrollRef        = useRef<HTMLDivElement>(null);
   const canvasRefs       = useRef<(HTMLCanvasElement | null)[]>([]);
@@ -201,7 +207,8 @@ export default function PdfViewer({ url, placements, className }: Props) {
 
   function boxLabel(key: string) {
     const [lo, type] = key.split('_');
-    return type === 'sig' ? `TTD L${lo}` : `Nama L${lo}`;
+    const label = OVERLAY_LABELS[type] ?? type;
+    return lo === 'doc' ? label : `${label} L${lo}`;
   }
 
   /* ── No PDF state ── */

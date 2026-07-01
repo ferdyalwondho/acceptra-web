@@ -18,6 +18,9 @@ class HelpController extends Controller
             default                                             => 'partner',
         };
 
-        return Inertia::render('Help/Index', ['roleGroup' => $group]);
+        return Inertia::render('Help/Index', [
+            'roleGroup'  => $group,
+            'initialTab' => $request->query('tab', 'faq'),
+        ]);
     }
 }

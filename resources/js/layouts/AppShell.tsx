@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import NotificationBell from '@/components/acceptra/NotificationBell';
 import IdleWarningDialog from '@/components/acceptra/IdleWarningDialog';
+import GetStartedModal from '@/components/acceptra/GetStartedModal';
 import { useIdleTimeout } from '@/hooks/use-idle-timeout';
 import type { PageProps } from '@/types';
 import {
@@ -117,12 +118,13 @@ function NavLinkInner({ item, collapsed, active }: { item: NavItem; collapsed: b
 
 /* ─── App Shell ─── */
 export default function AppShell({ children }: PropsWithChildren) {
-  const { auth, unreadNotifications = 0, recentNotifications = [], l1PendingCount = 0, locale } = usePage<PageProps>().props;
+  const { auth, unreadNotifications = 0, recentNotifications = [], l1PendingCount = 0, locale, show_get_started_modal } = usePage<PageProps>().props;
   const user = auth?.user ?? { name: 'User', email: '', role: 'admin', initials: 'U', preferred_language: 'id' as const };
   const ws = workspace(user.role);
 
   const { t } = useTranslation();
   const { showWarning, countdown, keepAlive } = useIdleTimeout();
+  const [showGetStarted, setShowGetStarted] = useState(!!show_get_started_modal);
 
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -319,6 +321,11 @@ export default function AppShell({ children }: PropsWithChildren) {
         open={showWarning}
         countdown={countdown}
         onKeepAlive={keepAlive}
+      />
+
+      <GetStartedModal
+        open={showGetStarted}
+        onClose={() => setShowGetStarted(false)}
       />
     </div>
   );
