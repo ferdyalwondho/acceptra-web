@@ -94,7 +94,7 @@ export default function ApprovalsHistory({ items = [] }: Props) {
                     <td className="px-5 py-3.5 font-mono text-xs text-[var(--color-text-secondary)]">{item.myDate}</td>
                     <td className="px-5 py-3.5">
                       {['10', '13'].includes(item.statusCode) && (
-                        <a href={`/documents/${item.id}/pdf`} className="flex items-center gap-1 text-xs font-medium text-ming hover:underline">
+                        <a href={`/documents/${item.id}/pdf`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs font-medium text-ming hover:underline">
                           <Download className="h-3.5 w-3.5" /> PDF
                         </a>
                       )}

@@ -479,25 +479,21 @@ export default function ApprovalScreen({
   ) : null;
 
   /* ── PDF Preview ── */
-  const revisionPdfPanel = punchlist_revision_pdf ? (
-    <div className="mb-4 flex items-center gap-3 rounded-lg border border-brand/20 bg-brand-surface/30 p-4">
-      <FileText className="h-8 w-8 shrink-0 text-brand-ink" />
+  const revisionPdfMeta = punchlist_revision_pdf ? (
+    <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2">
+      <FileText className="h-5 w-5 shrink-0 text-brand-ink" />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+        <p className="truncate text-xs font-medium text-[var(--color-text-primary)]">
           {punchlist_revision_pdf.filename}
         </p>
-        <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
+        <p className="text-[11px] text-[var(--color-text-secondary)]">
           Diupload {punchlist_revision_pdf.uploaded_at} oleh {punchlist_revision_pdf.uploaded_by}
         </p>
       </div>
-      <a
-        href={punchlist_revision_pdf.url}
-        className="flex shrink-0 h-8 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
-      >
-        <Download className="h-3.5 w-3.5" /> Download
-      </a>
     </div>
   ) : null;
+
+  const isVerifyingWithRevision = mode === 'verify' && !!punchlist_revision_pdf;
 
   const preview = (
     <div className="flex h-full flex-col gap-4">
@@ -505,7 +501,7 @@ export default function ApprovalScreen({
       <div className="flex items-center gap-3">
         <span className="font-mono text-sm text-[var(--color-text-secondary)]">{doc.uniqueId}</span>
         <StatusBadge code={doc.statusCode} size="sm" className="ml-auto" />
-        {pdf_url && (
+        {!isVerifyingWithRevision && pdf_url && (
           <a
             href={pdf_url}
             target="_blank"
@@ -517,28 +513,56 @@ export default function ApprovalScreen({
         )}
       </div>
 
-      {/* PDF revisi punchlist (verify mode) */}
-      {mode === 'verify' && revisionPdfPanel}
-
-      {/* PDF Viewer — dual view saat ada PDF yang direject sebelumnya di level ini */}
-      <div className={cn('grid flex-1 gap-4', previous_pdf_url ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1')}>
-        {previous_pdf_url && (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2 rounded-md bg-danger-surface/60 px-3 py-1.5 text-xs font-semibold text-danger">
-              <XCircle className="h-3.5 w-3.5" /> PDF Sebelumnya (Ditolak)
-            </div>
-            <PdfViewer url={previous_pdf_url} placements={null} className="flex-1" />
-          </div>
-        )}
-        <div className="flex flex-col gap-2">
-          {previous_pdf_url && (
-            <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
-              <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Terbaru
+      {isVerifyingWithRevision ? (
+        // Verify mode: the revised PDF is what needs review, so it's the one embedded —
+        // the original just becomes a labeled download-only box below.
+        <div className="flex flex-1 flex-col gap-2">
+          {pdf_url && (
+            <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2">
+              <FileText className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-[var(--color-text-primary)]">PDF Utama</p>
+                <p className="text-[11px] text-[var(--color-text-secondary)]">
+                  Dokumen asli sebelum revisi punchlist — belum berubah.
+                </p>
+              </div>
+              <a
+                href={pdf_url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex shrink-0 h-7 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
+              >
+                <Download className="h-3.5 w-3.5" /> Download
+              </a>
             </div>
           )}
-          <PdfViewer url={pdf_url ?? null} placements={placements} className="flex-1" />
+          <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
+            <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Punchlist
+          </div>
+          {revisionPdfMeta}
+          <PdfViewer url={punchlist_revision_pdf!.url} placements={null} className="flex-1" />
         </div>
-      </div>
+      ) : (
+        // PDF Viewer — dual view saat ada PDF yang direject sebelumnya di level ini
+        <div className={cn('grid flex-1 gap-4', previous_pdf_url ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1')}>
+          {previous_pdf_url && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 rounded-md bg-danger-surface/60 px-3 py-1.5 text-xs font-semibold text-danger">
+                <XCircle className="h-3.5 w-3.5" /> PDF Sebelumnya (Ditolak)
+              </div>
+              <PdfViewer url={previous_pdf_url} placements={null} className="flex-1" />
+            </div>
+          )}
+          <div className="flex flex-col gap-2">
+            {previous_pdf_url && (
+              <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
+                <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Terbaru
+              </div>
+            )}
+            <PdfViewer url={pdf_url ?? null} placements={placements} className="flex-1" />
+          </div>
+        </div>
+      )}
 
       {/* Excel Attachment panel */}
       {excel_attachment && (

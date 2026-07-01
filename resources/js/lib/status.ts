@@ -1,6 +1,7 @@
 export type StatusCategory = 'info' | 'success' | 'warning' | 'danger';
 
 export const ATP_STATUS: Record<string, { label: string; category: StatusCategory; icon: string }> = {
+  'draft': { label: 'Draft – Belum Disubmit',                     category: 'warning', icon: 'FileEdit' },
   '01': { label: 'Submit & On Review L1',                         category: 'info',    icon: 'Inbox' },
   '02': { label: 'L1 Rejected – Need Rectification',              category: 'danger',  icon: 'XCircle' },
   '03': { label: 'Done Rectification – On Review L1',             category: 'info',    icon: 'RotateCw' },

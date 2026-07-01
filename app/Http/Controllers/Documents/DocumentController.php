@@ -11,6 +11,7 @@ use App\Models\DocumentAttachment;
 use App\Models\Partner;
 use App\Models\Template;
 use App\Models\TemplateLevel;
+use App\Models\User;
 use App\Services\AuditService;
 use App\Services\DocumentQueryService;
 use App\Services\UniqueIdService;
@@ -201,6 +202,7 @@ class DocumentController extends Controller
                     'status'              => $s->status,
                     'is_active'           => $s->is_active,
                     'action_at'           => $s->action_at?->toISOString(),
+                    'reject_reason'       => $s->reject_reason,
                 ]),
                 'atp_punchlist' => $document->atp_punchlist,
             ],
@@ -382,7 +384,7 @@ class DocumentController extends Controller
         $document = null;
         $l2Step   = null;
 
-        DB::transaction(function () use ($validated, $user, $isDraft, $isAdmin, $pdfPath, $excelPath, &$document, &$l2Step) {
+        DB::transaction(function () use ($validated, $user, $isDraft, $isAdmin, $pdfPath, $excelPath, $request, &$document, &$l2Step) {
             $uniqueId = (new UniqueIdService)->generate(now()->year);
 
             $template  = Template::with('levels')->findOrFail($validated['template_id']);
@@ -536,6 +538,9 @@ class DocumentController extends Controller
             'Document cannot be revised in its current state.'
         );
 
+        // Saving as draft (no status transition) only applies to actual draft documents.
+        $isDraftSave = ! $isRejected && $request->boolean('_draft', false);
+
         if ($isRejected) {
             // A rejected document may only have its PDF/Excel replaced on resubmission;
             // metadata, template, and PICs stay as originally submitted.
@@ -567,7 +572,11 @@ class DocumentController extends Controller
                     ->toArray(),
             ];
         } else {
-            $validated = $this->validateSubmission($request, false, $isAdmin);
+            $validated = $this->validateSubmission($request, $isDraftSave, $isAdmin, requirePdf: false);
+
+            if (! $isDraftSave && ! $request->hasFile('pdf_file') && ! $document->original_pdf_path) {
+                return back()->withErrors(['pdf_file' => 'PDF file is required to submit for approval.'])->withInput();
+            }
         }
 
         $previousPdfPath = $document->original_pdf_path;
@@ -592,6 +601,62 @@ class DocumentController extends Controller
             ]);
         }
 
+        $pdfChanged      = $request->hasFile('pdf_file');
+        $templateChanged = $document->template_id !== $validated['template_id'];
+
+        // Save-draft: persist the edits but keep status_code = 'draft', no approval flow yet.
+        if ($isDraftSave) {
+            $placement = ($pdfChanged || $templateChanged)
+                ? ['status' => 'pending', 'positions' => null]
+                : ($document->template_snapshot['placement'] ?? ['status' => 'pending', 'positions' => null]);
+
+            DB::transaction(function () use ($validated, $user, $document, $pdfPath, $placement) {
+                $template = Template::with('levels')->findOrFail($validated['template_id']);
+                $snapshot = $this->buildSnapshot($template, $placement);
+                $pics     = $validated['pics'] ?? [];
+
+                $document->update([
+                    'pt_index'          => $validated['pt_index'],
+                    'link_id'           => $validated['link_id'] ?? null,
+                    'link_name'         => $validated['link_name'] ?? null,
+                    'project_code'      => $validated['project_code'] ?? null,
+                    'vendor_contractor' => $validated['vendor_contractor'],
+                    'template_id'       => $template->id,
+                    'template_snapshot' => $snapshot,
+                    'sow_name'          => $template->name,
+                    'tower_id_ne'       => $validated['tower_id_ne'] ?? null,
+                    'site_name_ne'      => $validated['site_name_ne'] ?? null,
+                    'tower_id_fe'       => $validated['tower_id_fe'] ?? null,
+                    'site_name_fe'      => $validated['site_name_fe'] ?? null,
+                    'original_pdf_path' => $pdfPath,
+                ]);
+
+                $document->approvalSteps()->delete();
+                foreach ($template->levels as $level) {
+                    ApprovalStep::create([
+                        'document_id'        => $document->id,
+                        'level_order'        => $level->level_order,
+                        'role'               => $level->role,
+                        'requires_signature' => $level->requires_signature,
+                        'approver_id'        => $level->level_order === 1 ? null : ($pics[$level->level_order] ?? null),
+                        'status'             => 'pending',
+                        'is_active'          => false,
+                    ]);
+                }
+
+                AuditService::log(
+                    $document->id,
+                    'document.draft_saved',
+                    "Draft updated by {$user->name}",
+                    [],
+                    $user->id,
+                );
+            });
+
+            return redirect()->route('documents.show', $document->id)
+                ->with('status', 'Draft saved.');
+        }
+
         // For rejected documents, determine which level to resume from.
         // Rejection codes follow level_order * 3 - 1 (02=L1, 05=L2, 08=L3, 11=L4).
         $rejectionLevel = null;
@@ -599,11 +664,86 @@ class DocumentController extends Controller
             $rejectionLevel = (int) (((int) ltrim($document->status_code, '0') + 1) / 3);
         }
 
+        return $this->finalizeSubmission(
+            $document, $validated, $user, $isAdmin,
+            $isRejected, $rejectionLevel,
+            $pdfPath, $previousPdfPath, $pdfChanged, $templateChanged,
+        );
+    }
+
+    // POST /documents/{id}/submit — quick submit-for-approval of an already-complete draft
+    public function submit(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps')->findOrFail($id);
+
+        if (! in_array($user->role, self::ADMIN_ROLES)) {
+            abort_if($document->submitted_by !== $user->id, 403);
+        }
+
+        abort_if($document->status_code !== 'draft', 422, 'Document is not in draft state.');
+
+        if (! $document->original_pdf_path) {
+            return back()->with('error', 'PDF file is required before submitting.');
+        }
+
+        $missingPic = $document->approvalSteps
+            ->where('level_order', '>', 1)
+            ->contains(fn (ApprovalStep $s) => ! $s->approver_id);
+
+        if ($missingPic) {
+            return back()->with('error', 'All approver levels must be assigned before submitting.');
+        }
+
+        $isAdmin   = in_array($user->role, self::ADMIN_ROLES);
+        $validated = [
+            'pt_index'          => $document->pt_index,
+            'link_id'           => $document->link_id,
+            'link_name'         => $document->link_name,
+            'project_code'      => $document->project_code,
+            'vendor_contractor' => $document->vendor_contractor,
+            'template_id'       => $document->template_id,
+            'tower_id_ne'       => $document->tower_id_ne,
+            'site_name_ne'      => $document->site_name_ne,
+            'tower_id_fe'       => $document->tower_id_fe,
+            'site_name_fe'      => $document->site_name_fe,
+            'pics'              => $document->approvalSteps
+                ->where('level_order', '>', 1)
+                ->mapWithKeys(fn (ApprovalStep $s) => [(string) $s->level_order => $s->approver_id])
+                ->toArray(),
+        ];
+
+        return $this->finalizeSubmission(
+            $document, $validated, $user, $isAdmin,
+            isRejected: false, rejectionLevel: null,
+            pdfPath: $document->original_pdf_path, previousPdfPath: null,
+            pdfChanged: false, templateChanged: false,
+        );
+    }
+
+    private function finalizeSubmission(
+        Document $document,
+        array $validated,
+        User $user,
+        bool $isAdmin,
+        bool $isRejected,
+        ?int $rejectionLevel,
+        string $pdfPath,
+        ?string $previousPdfPath,
+        bool $pdfChanged,
+        bool $templateChanged,
+    ): RedirectResponse {
         $nextActiveStep = null;
 
-        DB::transaction(function () use ($request, $validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, &$nextActiveStep) {
+        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, &$nextActiveStep) {
             $template = Template::with('levels')->findOrFail($validated['template_id']);
-            $snapshot = $this->buildSnapshot($template, ['status' => 'pending', 'positions' => null]);
+
+            // Placement only needs to be redone if the PDF or the approval template changed;
+            // otherwise the previously saved (or still-pending) placement carries over.
+            $placement = ($isRejected || $pdfChanged || $templateChanged)
+                ? ['status' => 'pending', 'positions' => null]
+                : ($document->template_snapshot['placement'] ?? ['status' => 'pending', 'positions' => null]);
+            $snapshot = $this->buildSnapshot($template, $placement);
             $pics     = $validated['pics'] ?? [];
 
             $updateData = [
@@ -632,7 +772,7 @@ class DocumentController extends Controller
             // PdfSignatureService::getPdfPath() caches a signed PDF at final_pdf_path and keeps
             // serving it even after original_pdf_path changes — reset it whenever the PDF is
             // replaced so the "current" PDF route doesn't serve a stale signed copy.
-            if ($request->hasFile('pdf_file')) {
+            if ($pdfChanged) {
                 $updateData['final_pdf_path'] = null;
             }
 
@@ -641,6 +781,11 @@ class DocumentController extends Controller
             // Rebuild approval steps.
             // When resuming from a rejection level, levels before it are auto-approved
             // so the flow continues from where it was rejected.
+            // Capture the outgoing steps first — levels re-carried as auto-approved must
+            // keep their original signature/timestamp, or the visual signature stamp on
+            // the generated PDF silently disappears for approvals made before the rejection.
+            $previousSteps = $document->approvalSteps()->get()->keyBy('level_order');
+
             $document->approvalSteps()->delete();
             foreach ($template->levels as $level) {
                 $n            = $level->level_order;
@@ -648,6 +793,7 @@ class DocumentController extends Controller
                 $isActive     = $rejectionLevel !== null
                     ? $n === $rejectionLevel
                     : $n === 1;
+                $previous     = $previousSteps->get($n);
 
                 ApprovalStep::create([
                     'document_id'        => $document->id,
@@ -655,8 +801,10 @@ class DocumentController extends Controller
                     'role'               => $level->role,
                     'requires_signature' => $level->requires_signature,
                     'approver_id'        => $n === 1 ? null : ($pics[$n] ?? null),
-                    'status'             => $autoApproved ? 'approved' : 'pending',
-                    'action_at'          => $autoApproved ? now() : null,
+                    'status'             => $autoApproved ? ($previous->status ?? 'approved') : 'pending',
+                    'action_at'          => $autoApproved ? ($previous->action_at ?? now()) : null,
+                    'signature_id'       => $autoApproved ? $previous?->signature_id : null,
+                    'punchlist_notes'    => $autoApproved ? $previous?->punchlist_notes : null,
                     'is_active'          => $isActive,
                 ]);
             }
@@ -1030,8 +1178,10 @@ class DocumentController extends Controller
     // Private helpers
     // ──────────────────────────────────────────────
 
-    private function validateSubmission(Request $request, bool $isDraft, bool $isAdmin): array
+    private function validateSubmission(Request $request, bool $isDraft, bool $isAdmin, ?bool $requirePdf = null): array
     {
+        $requirePdf = $requirePdf ?? ! $isDraft;
+
         $rules = [
             'vendor_contractor' => ['required', 'string', 'max:200'],
             'pt_index'          => ['required', 'string', 'max:100'],
@@ -1043,8 +1193,11 @@ class DocumentController extends Controller
             'tower_id_fe'       => ['nullable', 'string', 'max:100'],
             'site_name_fe'      => ['nullable', 'string', 'max:200'],
             'template_id'       => ['required', 'uuid', Rule::exists('templates', 'id')->where('status', 'active')],
-            'pdf_file'          => [$isDraft ? 'nullable' : 'required', 'file', 'mimes:pdf', 'max:20480'],
+            'pdf_file'          => [$requirePdf ? 'required' : 'nullable', 'file', 'mimes:pdf', 'max:20480'],
             'excel_file'        => ['nullable', 'file', 'mimes:xlsx,xls', 'max:10240'],
+            // Always keep a base rule for 'pics' so partially-filled PICs survive a draft save —
+            // without a rule here, Laravel's validate() strips the whole key from the output.
+            'pics'              => ['nullable', 'array'],
         ];
 
         if ($isAdmin) {
@@ -1065,18 +1218,18 @@ class DocumentController extends Controller
             'partner_id.exists'          => 'Please select a valid partner.',
         ];
 
-        // PIC validation per level (only for submit, not draft)
-        if (! $isDraft) {
-            $template = Template::with('levels')
-                ->where('status', 'active')
-                ->find($request->input('template_id'));
+        // PIC validation per level — required to submit, but merely format-checked (and preserved) while draft.
+        $template = Template::with('levels')
+            ->where('status', 'active')
+            ->find($request->input('template_id'));
 
-            if ($template) {
-                foreach ($template->levels->where('level_order', '>', 1) as $level) {
-                    $rules["pics.{$level->level_order}"] = ['required', 'uuid', 'exists:users,id'];
-                    $messages["pics.{$level->level_order}.required"] = "Please select an approver for Level {$level->level_order}.";
-                    $messages["pics.{$level->level_order}.exists"]   = "Please select a valid approver for Level {$level->level_order}.";
-                }
+        if ($template) {
+            foreach ($template->levels->where('level_order', '>', 1) as $level) {
+                $rules["pics.{$level->level_order}"] = $isDraft
+                    ? ['nullable', 'uuid', 'exists:users,id']
+                    : ['required', 'uuid', 'exists:users,id'];
+                $messages["pics.{$level->level_order}.required"] = "Please select an approver for Level {$level->level_order}.";
+                $messages["pics.{$level->level_order}.exists"]   = "Please select a valid approver for Level {$level->level_order}.";
             }
         }
 

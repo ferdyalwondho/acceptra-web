@@ -180,8 +180,9 @@ export default function DocumentEdit({
     form.post(`/documents/${doc.id}/revise`, { forceFormData: true });
   }
 
-  const allPicsFilled = levels.length > 0 && levels.every((l) => form.data.pics[String(l.level_order)]);
-  const pdfReady      = doc.has_pdf || !!form.data.pdf_file;
+  const allPicsFilled  = levels.length > 0 && levels.every((l) => form.data.pics[String(l.level_order)]);
+  const pdfReady       = doc.has_pdf || !!form.data.pdf_file;
+  const isDraftEditing = !is_rejected_revision && !is_punchlist_revision;
 
   // ── Punchlist Revision Upload Mode ───────────────────────────────────────────
   if (is_punchlist_revision) {
@@ -622,12 +623,22 @@ export default function DocumentEdit({
           >
             Batal
           </Link>
+          {isDraftEditing && (
+            <button
+              type="button"
+              onClick={() => submit(true)}
+              disabled={form.processing}
+              className="h-9 rounded-md border border-[var(--color-border-strong)] bg-white px-5 text-sm font-semibold text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-bg-subtle)] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
+            >
+              {form.processing ? 'Memproses…' : 'Simpan Draft'}
+            </button>
+          )}
           <button
             type="submit"
-            disabled={form.processing || (is_rejected_revision && !form.data.pdf_file)}
+            disabled={form.processing || !pdfReady || (is_rejected_revision && !form.data.pdf_file)}
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
           >
-            {form.processing ? 'Memproses…' : is_rejected_revision ? 'Submit Revisi PDF' : 'Submit Request'}
+            {form.processing ? 'Memproses…' : is_rejected_revision ? 'Submit Revisi PDF' : 'Submit untuk Approval'}
           </button>
         </div>
       </form>

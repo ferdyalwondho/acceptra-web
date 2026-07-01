@@ -198,8 +198,8 @@ class DashboardController extends Controller
 
     private function approverDashboard(User $user): Response
     {
-        // Top 5 documents with active pending step — oldest first (longest waiting)
-        $needApproval = Document::with([
+        // Documents with an active pending approval step for this user.
+        $pendingApprovals = Document::with([
                 'approvalSteps' => fn ($q) =>
                     $q->where('approver_id', $user->id)
                       ->where('is_active', true)
@@ -210,15 +210,6 @@ class DashboardController extends Controller
                   ->where('is_active', true)
                   ->where('status', 'pending')
             )
-            ->orderByRaw(
-                '(SELECT updated_at FROM approval_steps
-                   WHERE document_id = documents.id
-                     AND approver_id = ?
-                     AND is_active = true
-                   LIMIT 1) ASC',
-                [$user->id]
-            )
-            ->limit(5)
             ->get()
             ->map(function (Document $doc) {
                 $step = $doc->approvalSteps->first();
@@ -229,9 +220,48 @@ class DashboardController extends Controller
                     'sow'          => $doc->sow_name,
                     'statusCode'   => $doc->status_code,
                     'levelOrder'   => $step?->level_order,
-                    'waitingSince' => $step?->updated_at->format('d M Y'),
+                    'kind'         => 'approval',
+                    'waitingSince' => $step?->updated_at,
                 ];
             });
+
+        // Documents awaiting this user's punchlist verification — these have no active
+        // ApprovalStep (the approval chain already finished), so they need their own
+        // query or they silently never show up here (same gap fixed earlier for /approvals).
+        $pendingPunchlistVerifications = Document::with([
+                'punchlistVerifications' => fn ($q) =>
+                    $q->where('approver_id', $user->id)
+                      ->where('status', 'pending'),
+                'punchlistVerifications.approvalStep',
+            ])
+            ->whereHas('punchlistVerifications', fn ($q) =>
+                $q->where('approver_id', $user->id)
+                  ->where('status', 'pending')
+            )
+            ->get()
+            ->map(function (Document $doc) {
+                $verification = $doc->punchlistVerifications->first();
+                return [
+                    'id'           => $doc->id,
+                    'uniqueId'     => $doc->unique_id,
+                    'project'      => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+                    'sow'          => $doc->sow_name,
+                    'statusCode'   => $doc->status_code,
+                    'levelOrder'   => $verification?->approvalStep?->level_order,
+                    'kind'         => 'punchlist',
+                    'waitingSince' => $verification?->updated_at,
+                ];
+            });
+
+        // Top 5 across both — oldest first (longest waiting)
+        $needApproval = $pendingApprovals->concat($pendingPunchlistVerifications)
+            ->sortBy('waitingSince')
+            ->take(5)
+            ->values()
+            ->map(fn (array $item) => [
+                ...$item,
+                'waitingSince' => $item['waitingSince']?->format('d M Y'),
+            ]);
 
         // Stats
         $pendingCount = ApprovalStep::where('approver_id', $user->id)
@@ -288,7 +318,7 @@ class DashboardController extends Controller
 
         return Inertia::render('Dashboard/Approver', [
             'need_approval'       => $needApproval,
-            'need_approval_count' => $needApproval->count(),
+            'need_approval_count' => $pendingApprovals->count() + $pendingPunchlistVerifications->count(),
             'recent_history'      => $recentHistory,
             'stats'               => $stats,
         ]);

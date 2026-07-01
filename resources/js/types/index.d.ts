@@ -187,6 +187,7 @@ export interface ApprovalStepRecord {
   status: 'pending' | 'approved' | 'approved_with_punchlist' | 'rejected' | 'offline_approved' | 'skipped';
   is_active: boolean;
   action_at: string | null;
+  reject_reason: string | null;
 }
 
 export interface ExcelAttachment {
@@ -284,6 +285,7 @@ export interface NeedApprovalDoc {
   sow: string;
   statusCode: string;
   levelOrder: number;
+  kind: 'approval' | 'punchlist';
   waitingSince: string;
 }
 
