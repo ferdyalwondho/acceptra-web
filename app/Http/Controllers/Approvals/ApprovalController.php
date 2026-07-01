@@ -53,11 +53,21 @@ class ApprovalController extends Controller
                 ->orderByDesc('date_atp_submission')
                 ->get();
         } else {
+            // An approver's queue includes both their active approval step AND any
+            // pending punchlist verification — the latter has no active ApprovalStep
+            // (the approval chain already finished), so it needs its own clause here
+            // or it silently never appears in the list.
             $docs = Document::with(['partner', 'approvalSteps.approver'])
-                ->whereHas('approvalSteps', fn ($q) =>
-                    $q->where('approver_id', $user->id)
-                      ->where('is_active', true)
-                )
+                ->where(function ($q) use ($user) {
+                    $q->whereHas('approvalSteps', fn ($sq) =>
+                            $sq->where('approver_id', $user->id)
+                               ->where('is_active', true)
+                        )
+                        ->orWhereHas('punchlistVerifications', fn ($pq) =>
+                            $pq->where('approver_id', $user->id)
+                               ->where('status', 'pending')
+                        );
+                })
                 ->orderByDesc('date_atp_submission')
                 ->get();
         }
@@ -465,7 +475,7 @@ class ApprovalController extends Controller
             'statusCode'  => $doc->status_code,
             'activeStep'  => ($step = $doc->approvalSteps->firstWhere('is_active', true))
                 ? 'L' . $step->level_order . ' — ' . (self::ROLE_LABELS[$step->role] ?? $step->role)
-                : null,
+                : ($doc->status_code === '15' ? 'Punchlist Verification' : null),
             'submittedAt' => $doc->date_atp_submission
                 ? $doc->date_atp_submission->format('d M Y')
                 : $doc->created_at->format('d M Y'),

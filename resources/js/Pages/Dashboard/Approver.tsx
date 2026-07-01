@@ -230,7 +230,9 @@ export default function DashboardApprover({ need_approval, need_approval_count, 
                       <p className="truncate text-sm font-medium text-[var(--color-text-primary)]">{doc.project}</p>
                       <p className="text-[11px] text-[var(--color-text-secondary)]">
                         <span className="font-semibold text-brand-ink">
-                          {t('approver_dashboard.step_your_turn', { level: doc.levelOrder })}
+                          {doc.kind === 'punchlist'
+                            ? t('approver_dashboard.step_punchlist_verify', { level: doc.levelOrder })
+                            : t('approver_dashboard.step_your_turn', { level: doc.levelOrder })}
                         </span>
                         {doc.waitingSince && <> · {t('approver_dashboard.since')} {doc.waitingSince}</>}
                       </p>
