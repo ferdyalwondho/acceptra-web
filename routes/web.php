@@ -91,10 +91,25 @@ Route::middleware('auth')->group(function () {
         );
         abort_if(! $document->original_pdf_path, 404);
 
-        $path = (new \App\Services\PdfSignatureService())->getPdfPath($document);
-        abort_if(! file_exists($path), 404);
-        return response()->file($path, ['Content-Type' => 'application/pdf']);
+        return (new \App\Services\PdfSignatureService())->streamPdf($document);
     })->name('documents.pdf');
+    Route::get('/documents/{id}/pdf/previous', function (string $id) {
+        $document = \App\Models\Document::findOrFail($id);
+        abort_if(
+            auth()->user()->role === 'partner' && $document->submitted_by !== auth()->id(),
+            403
+        );
+        abort_if(
+            ! $document->previous_pdf_path || ! \Illuminate\Support\Facades\Storage::exists($document->previous_pdf_path),
+            404
+        );
+
+        return \Illuminate\Support\Facades\Storage::response(
+            $document->previous_pdf_path,
+            'previous.pdf',
+            ['Content-Type' => 'application/pdf']
+        );
+    })->name('documents.pdf.previous');
     Route::post('/documents/{id}/reassign',            fn () => redirect()->back())->name('documents.reassign');
     Route::post('/documents/{id}/revise',              [DocumentController::class, 'revise'])->name('documents.revise');
     Route::post('/documents/{id}/punchlist-revision',  [DocumentController::class, 'uploadPunchlistRevision'])->name('documents.punchlist-revision');
@@ -169,6 +184,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/profile',           [ProfileController::class, 'edit'])->name('profile.edit');
     Route::put('/profile',           fn () => redirect()->back())->name('profile.update');
     Route::post('/profile/language', [ProfileController::class, 'updateLanguage'])->name('profile.language');
+    Route::post('/profile/dismiss-get-started', [ProfileController::class, 'dismissGetStarted'])->name('profile.dismiss-get-started');
     Route::get('/profile/signature',                    [ProfileController::class, 'signature'])->name('profile.signature');
     Route::post('/profile/signature',                   [ProfileController::class, 'storeSignature'])->name('profile.signature.store');
     Route::delete('/profile/signature/{sig}',           [ProfileController::class, 'destroySignature'])->name('profile.signature.destroy');

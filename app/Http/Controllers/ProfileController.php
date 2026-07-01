@@ -34,6 +34,13 @@ class ProfileController extends Controller
         return Inertia::location(url()->previous() ?: route('dashboard'));
     }
 
+    public function dismissGetStarted(Request $request): \Symfony\Component\HttpFoundation\Response
+    {
+        $request->user()->update(['has_seen_get_started' => true]);
+
+        return response()->noContent();
+    }
+
     // GET /profile/signature
     public function signature(Request $request): Response
     {

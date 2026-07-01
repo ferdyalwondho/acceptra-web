@@ -33,6 +33,7 @@ class HandleInertiaRequests extends Middleware
                 ] : null,
             ],
             'locale' => app()->getLocale(),
+            'show_get_started_modal' => fn () => $request->session()->get('show_get_started_modal', false),
             'unreadNotifications' => fn () => $user
                 ? InAppNotification::where('user_id', $user->id)->where('is_read', false)->count()
                 : 0,

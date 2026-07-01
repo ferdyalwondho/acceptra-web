@@ -32,6 +32,17 @@ class AuditLog extends Model
         return (string) Str::uuid7();
     }
 
+    protected static function booted(): void
+    {
+        // $timestamps is disabled (append-only, no updated_at), so created_at is
+        // never auto-managed by Eloquent. Set it explicitly via now() (app timezone)
+        // instead of relying on the DB column's CURRENT_TIMESTAMP default, which
+        // evaluates in Postgres' session timezone (UTC), not Asia/Jakarta.
+        static::creating(function (self $model) {
+            $model->created_at ??= now();
+        });
+    }
+
     public function document(): BelongsTo
     {
         return $this->belongsTo(Document::class);

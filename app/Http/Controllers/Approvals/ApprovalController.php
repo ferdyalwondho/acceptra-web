@@ -124,6 +124,12 @@ class ApprovalController extends Controller
         $activeStep      = $document->approvalSteps->firstWhere('is_active', true);
         $excelAttachment = $document->attachments->firstWhere('type', 'excel');
 
+        // Show the previously-rejected PDF side by side only to the approver whose
+        // level actually rejected it — not any other level in the chain.
+        $showPreviousPdf = $document->previous_pdf_path
+            && $activeStep
+            && (int) $document->previous_pdf_rejected_level === (int) $activeStep->level_order;
+
         $canAct     = false;
         $myStepDone = null;
 
@@ -184,6 +190,9 @@ class ApprovalController extends Controller
             ] : null,
             'pdf_url'          => $document->original_pdf_path
                 ? route('documents.pdf', $document->id)
+                : null,
+            'previous_pdf_url' => $showPreviousPdf
+                ? route('documents.pdf.previous', $document->id)
                 : null,
             'placements'       => ($placement && ! empty($placement['positions']))
                 ? $placement['positions']
@@ -280,6 +289,10 @@ class ApprovalController extends Controller
                 'signature_id'    => $signatureId,
                 'approver_id'     => $activeStep->approver_id ?? $user->id,
             ]);
+
+            // Every approve changes the signature and/or status_code (both get stamped
+            // onto the final PDF) — invalidate the cache so /documents/{id}/pdf regenerates.
+            $document->update(['final_pdf_path' => null]);
 
             // Find next pending step
             $nextStep = $document->approvalSteps()
@@ -386,7 +399,7 @@ class ApprovalController extends Controller
             ]);
 
             $rejectCode = str_pad($activeStep->level_order * 3 - 1, 2, '0', STR_PAD_LEFT);
-            $document->update(['status_code' => $rejectCode]);
+            $document->update(['status_code' => $rejectCode, 'final_pdf_path' => null]);
 
             AuditService::log(
                 $document->id,

@@ -8,6 +8,7 @@ import { FAQ, GUIDE, type RoleGroup, type GuideSection } from '@/data/helpConten
 
 interface Props {
   roleGroup: RoleGroup;
+  initialTab?: Tab;
 }
 
 type Tab = 'faq' | 'guide';
@@ -136,9 +137,9 @@ function GuidePanel({ sections }: { sections: GuideSection[] }) {
   );
 }
 
-export default function HelpIndex({ roleGroup }: Props) {
+export default function HelpIndex({ roleGroup, initialTab }: Props) {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<Tab>('faq');
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab ?? 'faq');
 
   const faqItems   = FAQ[roleGroup]   ?? FAQ.partner;
   const guideSections = GUIDE[roleGroup] ?? GUIDE.partner;

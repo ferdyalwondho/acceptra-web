@@ -225,6 +225,7 @@ class DocumentController extends Controller
 
         $isAdmin              = in_array($user->role, self::ADMIN_ROLES);
         $isPunchlistRevision  = $document->status_code === '14';
+        $isRejectedRevision   = (bool) preg_match('/^(02|05|08|11)$/', $document->status_code ?? '');
 
         // Authorization
         if (! $isAdmin) {
@@ -300,6 +301,7 @@ class DocumentController extends Controller
             'templates'             => $templates,
             'is_admin_submit'       => $isAdmin,
             'is_punchlist_revision' => false,
+            'is_rejected_revision'  => $isRejectedRevision,
         ];
 
         if ($isAdmin) {
@@ -533,9 +535,43 @@ class DocumentController extends Controller
             422,
             'Document cannot be revised in its current state.'
         );
-        $validated = $this->validateSubmission($request, false, $isAdmin);
 
-        $pdfPath = $document->original_pdf_path;
+        if ($isRejected) {
+            // A rejected document may only have its PDF/Excel replaced on resubmission;
+            // metadata, template, and PICs stay as originally submitted.
+            $request->validate([
+                'pdf_file'   => ['required', 'file', 'mimes:pdf', 'max:20480'],
+                'excel_file' => ['nullable', 'file', 'mimes:xlsx,xls', 'max:10240'],
+            ], [
+                'pdf_file.required' => 'PDF file is required.',
+                'pdf_file.mimes'    => 'File must be a valid PDF.',
+                'pdf_file.max'      => 'PDF file size must not exceed 20MB.',
+                'excel_file.mimes'  => 'Excel file must be .xlsx or .xls.',
+                'excel_file.max'    => 'Excel file size must not exceed 10MB.',
+            ]);
+
+            $validated = [
+                'pt_index'          => $document->pt_index,
+                'link_id'           => $document->link_id,
+                'link_name'         => $document->link_name,
+                'project_code'      => $document->project_code,
+                'vendor_contractor' => $document->vendor_contractor,
+                'template_id'       => $document->template_id,
+                'tower_id_ne'       => $document->tower_id_ne,
+                'site_name_ne'      => $document->site_name_ne,
+                'tower_id_fe'       => $document->tower_id_fe,
+                'site_name_fe'      => $document->site_name_fe,
+                'pics'              => $document->approvalSteps
+                    ->where('level_order', '>', 1)
+                    ->mapWithKeys(fn (ApprovalStep $s) => [(string) $s->level_order => $s->approver_id])
+                    ->toArray(),
+            ];
+        } else {
+            $validated = $this->validateSubmission($request, false, $isAdmin);
+        }
+
+        $previousPdfPath = $document->original_pdf_path;
+        $pdfPath         = $document->original_pdf_path;
 
         if ($request->hasFile('pdf_file')) {
             $pdfPath = $request->file('pdf_file')->store('documents/pdf');
@@ -565,12 +601,12 @@ class DocumentController extends Controller
 
         $nextActiveStep = null;
 
-        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $rejectionLevel, &$nextActiveStep) {
+        DB::transaction(function () use ($request, $validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, &$nextActiveStep) {
             $template = Template::with('levels')->findOrFail($validated['template_id']);
             $snapshot = $this->buildSnapshot($template, ['status' => 'pending', 'positions' => null]);
             $pics     = $validated['pics'] ?? [];
 
-            $document->update([
+            $updateData = [
                 'pt_index'            => $validated['pt_index'],
                 'link_id'             => $validated['link_id'] ?? null,
                 'link_name'           => $validated['link_name'] ?? null,
@@ -586,7 +622,21 @@ class DocumentController extends Controller
                 'original_pdf_path'   => $pdfPath,
                 'status_code'         => '01',
                 'date_atp_submission' => now()->toDateString(),
-            ]);
+            ];
+
+            if ($isRejected) {
+                $updateData['previous_pdf_path']           = $previousPdfPath;
+                $updateData['previous_pdf_rejected_level'] = $rejectionLevel;
+            }
+
+            // PdfSignatureService::getPdfPath() caches a signed PDF at final_pdf_path and keeps
+            // serving it even after original_pdf_path changes — reset it whenever the PDF is
+            // replaced so the "current" PDF route doesn't serve a stale signed copy.
+            if ($request->hasFile('pdf_file')) {
+                $updateData['final_pdf_path'] = null;
+            }
+
+            $document->update($updateData);
 
             // Rebuild approval steps.
             // When resuming from a rejection level, levels before it are auto-approved

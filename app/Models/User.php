@@ -26,6 +26,7 @@ class User extends Authenticatable implements CanResetPasswordContract
         'partner_id',
         'status',
         'preferred_language',
+        'has_seen_get_started',
         'email_verified_at',
         'invitation_token',
         'invitation_expires_at',
@@ -43,6 +44,7 @@ class User extends Authenticatable implements CanResetPasswordContract
             'email_verified_at'     => 'datetime',
             'invitation_expires_at' => 'datetime',
             'password'              => 'hashed',
+            'has_seen_get_started'  => 'boolean',
         ];
     }
 
