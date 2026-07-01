@@ -697,5 +697,13 @@
     "logout_in_plural": "Logging out in {{count}} seconds",
     "stay_logged_in": "Stay Logged In",
     "logout_now": "Logout Now"
+  },
+  "get_started": {
+    "title": "Welcome to Acceptra",
+    "description": "Get familiar with the Acceptra workflow through the User Guide, or check the FAQ if you have questions.",
+    "cta_guide": "View User Guide",
+    "cta_faq": "View FAQ",
+    "dont_show_again": "Don't show this again",
+    "close_btn": "Close"
   }
 }

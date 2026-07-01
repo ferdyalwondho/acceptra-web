@@ -32,6 +32,8 @@ class Document extends Model
         'site_name_fe',
         'original_pdf_path',
         'final_pdf_path',
+        'previous_pdf_path',
+        'previous_pdf_rejected_level',
         'status_code',
         'date_atp_submission',
         'date_atp_approved',
@@ -41,10 +43,11 @@ class Document extends Model
     ];
 
     protected $casts = [
-        'template_snapshot'   => 'array',
-        'date_atp_submission' => 'date',
-        'date_atp_approved'   => 'date',
-        'is_imported'         => 'boolean',
+        'template_snapshot'           => 'array',
+        'date_atp_submission'         => 'date',
+        'date_atp_approved'           => 'date',
+        'is_imported'                 => 'boolean',
+        'previous_pdf_rejected_level' => 'integer',
     ];
 
     public function newUniqueId(): string

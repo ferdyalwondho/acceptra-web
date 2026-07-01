@@ -57,6 +57,7 @@ interface Props {
   user_signature_id?: string | null;
   user_signature_url?: string | null;
   pdf_url?: string | null;
+  previous_pdf_url?: string | null;
   placements?: Record<string, PlacementPosition> | null;
 }
 
@@ -73,6 +74,7 @@ export default function ApprovalScreen({
   user_signature_id,
   user_signature_url,
   pdf_url,
+  previous_pdf_url,
   placements,
 }: Props) {
   const [action,        setAction]        = useState<ActionType | null>(null);
@@ -518,12 +520,25 @@ export default function ApprovalScreen({
       {/* PDF revisi punchlist (verify mode) */}
       {mode === 'verify' && revisionPdfPanel}
 
-      {/* PDF Viewer */}
-      <PdfViewer
-        url={pdf_url ?? null}
-        placements={placements}
-        className="flex-1"
-      />
+      {/* PDF Viewer — dual view saat ada PDF yang direject sebelumnya di level ini */}
+      <div className={cn('grid flex-1 gap-4', previous_pdf_url ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1')}>
+        {previous_pdf_url && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 rounded-md bg-danger-surface/60 px-3 py-1.5 text-xs font-semibold text-danger">
+              <XCircle className="h-3.5 w-3.5" /> PDF Sebelumnya (Ditolak)
+            </div>
+            <PdfViewer url={previous_pdf_url} placements={null} className="flex-1" />
+          </div>
+        )}
+        <div className="flex flex-col gap-2">
+          {previous_pdf_url && (
+            <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
+              <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Terbaru
+            </div>
+          )}
+          <PdfViewer url={pdf_url ?? null} placements={placements} className="flex-1" />
+        </div>
+      </div>
 
       {/* Excel Attachment panel */}
       {excel_attachment && (

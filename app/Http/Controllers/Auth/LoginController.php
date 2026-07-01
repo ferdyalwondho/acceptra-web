@@ -44,6 +44,10 @@ class LoginController extends Controller
 
         $request->session()->regenerate();
 
+        if (! $user->has_seen_get_started) {
+            $request->session()->flash('show_get_started_modal', true);
+        }
+
         // FR-AUTH-02 + FR-AUTH-03: redirect ke intended URL atau default by role
         return redirect()->intended($user->redirectRoute());
     }

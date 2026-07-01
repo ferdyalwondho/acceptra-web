@@ -696,5 +696,13 @@
     "logout_in": "Logout dalam {{count}} detik",
     "stay_logged_in": "Tetap Login",
     "logout_now": "Logout Sekarang"
+  },
+  "get_started": {
+    "title": "Selamat Datang di Acceptra",
+    "description": "Yuk kenalan dulu dengan alur kerja Acceptra lewat Panduan Pengguna atau cek FAQ kalau ada pertanyaan.",
+    "cta_guide": "Lihat Panduan Pengguna",
+    "cta_faq": "Lihat FAQ",
+    "dont_show_again": "Jangan tampilkan lagi",
+    "close_btn": "Tutup"
   }
 }

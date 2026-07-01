@@ -32,12 +32,16 @@ interface Props extends PageProps {
   partners?: PartnerOption[];
   is_admin_submit: boolean;
   is_punchlist_revision?: boolean;
+  is_rejected_revision?: boolean;
   atp_punchlist?: string | null;
   last_revision_filename?: string | null;
 }
 
 const inputCls =
   'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] transition-colors duration-[120ms] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40';
+
+const lockedInputCls =
+  'h-9 w-full rounded-sm border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 text-sm text-[var(--color-text-secondary)] disabled:cursor-not-allowed';
 
 const errorCls = 'mt-1 text-xs text-danger';
 
@@ -89,6 +93,7 @@ export default function DocumentEdit({
   partners,
   is_admin_submit,
   is_punchlist_revision = false,
+  is_rejected_revision = false,
   atp_punchlist,
   last_revision_filename,
 }: Props) {
@@ -303,6 +308,15 @@ export default function DocumentEdit({
         </div>
       )}
 
+      {is_rejected_revision && (
+        <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Dokumen ini ditolak approver. Hanya <strong>file PDF</strong> dan <strong>lampiran Excel</strong> yang bisa direvisi — metadata, template SOW, dan PIC lainnya terkunci.
+          </span>
+        </div>
+      )}
+
       <form
         onSubmit={(e) => { e.preventDefault(); submit(false); }}
         encType="multipart/form-data"
@@ -317,7 +331,8 @@ export default function DocumentEdit({
                   <select
                     value={form.data.partner_id}
                     onChange={(e) => form.setData('partner_id', e.target.value)}
-                    className={inputCls}
+                    className={is_rejected_revision ? lockedInputCls : inputCls}
+                    disabled={is_rejected_revision}
                   >
                     <option value="">-- Pilih partner --</option>
                     {(partners ?? []).map((p) => (
@@ -334,7 +349,8 @@ export default function DocumentEdit({
                   type="text"
                   value={form.data.vendor_contractor}
                   onChange={(e) => form.setData('vendor_contractor', e.target.value)}
-                  className={inputCls}
+                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  disabled={is_rejected_revision}
                 />
               </Field>
             </div>
@@ -346,7 +362,8 @@ export default function DocumentEdit({
                   placeholder="mis. PT.2024.001"
                   value={form.data.pt_index}
                   onChange={(e) => form.setData('pt_index', e.target.value)}
-                  className={inputCls}
+                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  disabled={is_rejected_revision}
                 />
               </Field>
             </div>
@@ -357,7 +374,8 @@ export default function DocumentEdit({
                 placeholder="MW-BKS-2406"
                 value={form.data.project_code}
                 onChange={(e) => form.setData('project_code', e.target.value)}
-                className={inputCls}
+                className={is_rejected_revision ? lockedInputCls : inputCls}
+                disabled={is_rejected_revision}
               />
             </Field>
             <Field label="Link ID" error={form.errors.link_id}>
@@ -366,7 +384,8 @@ export default function DocumentEdit({
                 placeholder="LNK-001"
                 value={form.data.link_id}
                 onChange={(e) => form.setData('link_id', e.target.value)}
-                className={inputCls}
+                className={is_rejected_revision ? lockedInputCls : inputCls}
+                disabled={is_rejected_revision}
               />
             </Field>
             <div className="sm:col-span-2">
@@ -376,7 +395,8 @@ export default function DocumentEdit({
                   placeholder="Microwave Link – Bekasi Sektor 4"
                   value={form.data.link_name}
                   onChange={(e) => form.setData('link_name', e.target.value)}
-                  className={inputCls}
+                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  disabled={is_rejected_revision}
                 />
               </Field>
             </div>
@@ -387,7 +407,8 @@ export default function DocumentEdit({
                 placeholder="TWR-NE-001"
                 value={form.data.tower_id_ne}
                 onChange={(e) => form.setData('tower_id_ne', e.target.value)}
-                className={inputCls}
+                className={is_rejected_revision ? lockedInputCls : inputCls}
+                disabled={is_rejected_revision}
               />
             </Field>
             <Field label="Site Name Near End" error={form.errors.site_name_ne}>
@@ -396,7 +417,8 @@ export default function DocumentEdit({
                 placeholder="Bekasi Industri"
                 value={form.data.site_name_ne}
                 onChange={(e) => form.setData('site_name_ne', e.target.value)}
-                className={inputCls}
+                className={is_rejected_revision ? lockedInputCls : inputCls}
+                disabled={is_rejected_revision}
               />
             </Field>
             <Field label="Tower ID Far End" error={form.errors.tower_id_fe}>
@@ -405,7 +427,8 @@ export default function DocumentEdit({
                 placeholder="TWR-FE-001"
                 value={form.data.tower_id_fe}
                 onChange={(e) => form.setData('tower_id_fe', e.target.value)}
-                className={inputCls}
+                className={is_rejected_revision ? lockedInputCls : inputCls}
+                disabled={is_rejected_revision}
               />
             </Field>
             <Field label="Site Name Far End" error={form.errors.site_name_fe}>
@@ -414,7 +437,8 @@ export default function DocumentEdit({
                 placeholder="Karawang Utara"
                 value={form.data.site_name_fe}
                 onChange={(e) => form.setData('site_name_fe', e.target.value)}
-                className={inputCls}
+                className={is_rejected_revision ? lockedInputCls : inputCls}
+                disabled={is_rejected_revision}
               />
             </Field>
           </div>
@@ -426,8 +450,8 @@ export default function DocumentEdit({
             <select
               value={form.data.template_id}
               onChange={handleTemplateChange}
-              className={inputCls}
-              disabled={loadingLevels}
+              className={is_rejected_revision ? lockedInputCls : inputCls}
+              disabled={loadingLevels || is_rejected_revision}
             >
               <option value="">-- Pilih template SOW --</option>
               {templates.map((t) => (
@@ -482,7 +506,8 @@ export default function DocumentEdit({
                       <select
                         value={form.data.pics[String(level.level_order)] ?? ''}
                         onChange={(e) => handlePicChange(level.level_order, e.target.value)}
-                        className={cn(inputCls, 'flex-1')}
+                        className={cn(is_rejected_revision ? lockedInputCls : inputCls, 'flex-1')}
+                        disabled={is_rejected_revision}
                       >
                         <option value="">-- Pilih PIC --</option>
                         {roleApprovers.map((u) => (
@@ -599,10 +624,10 @@ export default function DocumentEdit({
           </Link>
           <button
             type="submit"
-            disabled={form.processing}
+            disabled={form.processing || (is_rejected_revision && !form.data.pdf_file)}
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
           >
-            {form.processing ? 'Memproses…' : 'Submit Request'}
+            {form.processing ? 'Memproses…' : is_rejected_revision ? 'Submit Revisi PDF' : 'Submit Request'}
           </button>
         </div>
       </form>

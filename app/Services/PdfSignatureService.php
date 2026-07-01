@@ -6,6 +6,7 @@ use App\Models\Document;
 use App\Models\Signature;
 use Illuminate\Support\Facades\Storage;
 use setasign\Fpdi\Fpdi;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PdfSignatureService
 {
@@ -16,31 +17,29 @@ class PdfSignatureService
     private const SAVE_SCALE = 1.4;
 
     /**
-     * Return absolute path to a PDF with signatures embedded.
-     * Generates and caches in documents/final/{id}.pdf on first call.
-     * Falls back to original PDF on any error.
+     * Stream a PDF with signatures embedded.
+     * Generates and caches to documents/final/{id}.pdf (on the default disk) on first call.
+     * Falls back to the original PDF on any error.
      */
-    public function getPdfPath(Document $document): string
+    public function streamPdf(Document $document): StreamedResponse
     {
-        $disk        = Storage::disk('local');
-        $originalRel = $document->original_pdf_path;
-
-        if (! $originalRel || ! $disk->exists($originalRel)) {
+        if (! $document->original_pdf_path || ! Storage::exists($document->original_pdf_path)) {
             abort(404, 'PDF not found.');
         }
 
-        // Return cached final PDF if it exists
-        if ($document->final_pdf_path && $disk->exists($document->final_pdf_path)) {
-            return $disk->path($document->final_pdf_path);
+        if (! $document->final_pdf_path || ! Storage::exists($document->final_pdf_path)) {
+            try {
+                $this->generateAndUpload($document);
+            } catch (\Throwable) {
+                // Fall through — the key resolution below falls back to the original.
+            }
         }
 
-        // Try to embed signatures; fall back to original on failure
-        try {
-            $finalPath = $this->generate($document, $disk->path($originalRel));
-            return $finalPath;
-        } catch (\Throwable) {
-            return $disk->path($originalRel);
-        }
+        $key = ($document->final_pdf_path && Storage::exists($document->final_pdf_path))
+            ? $document->final_pdf_path
+            : $document->original_pdf_path;
+
+        return Storage::response($key, basename($key), ['Content-Type' => 'application/pdf']);
     }
 
     /**
@@ -68,101 +67,161 @@ class PdfSignatureService
         return $outputPath;
     }
 
-    private function generate(Document $document, string $originalAbsPath): string
+    /**
+     * Download original_pdf_path from the default disk, embed signatures/stamps,
+     * and upload the result back to the default disk as documents/final/{id}.pdf.
+     * No-op if no placement positions are configured or no signatures exist yet.
+     */
+    private function generateAndUpload(Document $document): void
     {
         $document->loadMissing(['approvalSteps.approver', 'approvalSteps.signature']);
 
         $placement = $document->template_snapshot['placement'] ?? [];
         $positions = $placement['positions'] ?? [];
 
-        // No signature placements configured — return original
         if (empty($positions)) {
-            return $originalAbsPath;
+            return;
         }
 
-        // Check if any step actually has a signature
         $hasAny = $document->approvalSteps->contains(
             fn ($s) => $s->signature_id !== null
         );
         if (! $hasAny) {
-            return $originalAbsPath;
+            return;
         }
 
-        // Decompress the PDF so the free FPDI parser can handle it
-        $parsablePath = $this->decompressPdf($originalAbsPath);
+        // tempnam() already creates the file — don't append an extension onto a
+        // separate path string, or the original tempnam()-created file becomes an
+        // orphan that never gets cleaned up. None of gs/FPDI/Image() below need a
+        // file extension (Image()'s type is passed explicitly as $imgType).
+        $tempInput = tempnam(sys_get_temp_dir(), 'acc_orig_');
+        $tempParsable = null;
+        $tempOutput   = null;
+        $tempSigFiles = [];
 
-        $pdf        = new Fpdi('P', 'pt');
-        $pageCount  = $pdf->setSourceFile($parsablePath);
+        try {
+            file_put_contents($tempInput, Storage::get($document->original_pdf_path));
 
-        for ($p = 1; $p <= $pageCount; $p++) {
-            $tplId = $pdf->importPage($p);
-            $size  = $pdf->getTemplateSize($tplId);
+            $tempParsable = $this->decompressPdf($tempInput);
 
-            $pdf->AddPage('P', [$size['width'], $size['height']]);
-            $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height']);
+            $pdf       = new Fpdi('P', 'pt');
+            $pageCount = $pdf->setSourceFile($tempParsable);
 
-            foreach ($positions as $key => $pos) {
-                if ((int) ($pos['page'] ?? 1) !== $p) {
-                    continue;
-                }
+            for ($p = 1; $p <= $pageCount; $p++) {
+                $tplId = $pdf->importPage($p);
+                $size  = $pdf->getTemplateSize($tplId);
 
-                // Convert from viewer-px-at-SAVE_SCALE to PDF points (same top-left origin)
-                $x = $pos['x']      / self::SAVE_SCALE;
-                $y = $pos['y']      / self::SAVE_SCALE;
-                $w = $pos['width']  / self::SAVE_SCALE;
-                $h = $pos['height'] / self::SAVE_SCALE;
+                $pdf->AddPage('P', [$size['width'], $size['height']]);
+                $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height']);
 
-                // Key format: "{level_order}_sig" or "{level_order}_name"
-                [$levelStr, $type] = explode('_', $key, 2);
-                $level = (int) $levelStr;
-                $step  = $document->approvalSteps->firstWhere('level_order', $level);
-
-                if (! $step) {
-                    continue;
-                }
-
-                if ($type === 'sig' && $step->signature_id) {
-                    $sig = $step->signature ?? Signature::find($step->signature_id);
-                    if (! $sig) {
+                foreach ($positions as $key => $pos) {
+                    if ((int) ($pos['page'] ?? 1) !== $p) {
                         continue;
                     }
 
-                    $imgAbs = Storage::disk('local')->path($sig->image_path);
-                    if (! file_exists($imgAbs)) {
+                    // Convert from viewer-px-at-SAVE_SCALE to PDF points (same top-left origin)
+                    $x = $pos['x']      / self::SAVE_SCALE;
+                    $y = $pos['y']      / self::SAVE_SCALE;
+                    $w = $pos['width']  / self::SAVE_SCALE;
+                    $h = $pos['height'] / self::SAVE_SCALE;
+
+                    // Key format: "{level_order}_sig" / "{level_order}_name", or
+                    // "doc_{type}" for document-level fields (not tied to a level).
+                    [$levelStr, $type] = explode('_', $key, 2);
+
+                    if ($levelStr === 'doc') {
+                        $this->stampDocumentField($pdf, $document, $type, $x, $y, $w, $h);
                         continue;
                     }
 
-                    $ext  = strtolower(pathinfo($sig->image_path, PATHINFO_EXTENSION));
-                    $type = match ($ext) {
-                        'jpg', 'jpeg' => 'JPEG',
-                        'gif'         => 'GIF',
-                        default       => 'PNG',
-                    };
+                    $level = (int) $levelStr;
+                    $step  = $document->approvalSteps->firstWhere('level_order', $level);
 
-                    $pdf->Image($imgAbs, $x, $y, $w, $h, $type);
+                    if (! $step) {
+                        continue;
+                    }
 
-                } elseif ($type === 'name' && $step->approver) {
-                    $fontSize = max(6, (int) round($h * 0.55));
-                    $pdf->SetFont('Helvetica', 'B', $fontSize);
-                    $pdf->SetTextColor(0, 0, 0);
-                    $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
-                    $pdf->Cell($w, $fontSize, $step->approver->name, 0, 0, 'C');
+                    if ($type === 'sig' && $step->signature_id) {
+                        $sig = $step->signature ?? Signature::find($step->signature_id);
+                        if (! $sig || ! Storage::exists($sig->image_path)) {
+                            continue;
+                        }
+
+                        $ext     = strtolower(pathinfo($sig->image_path, PATHINFO_EXTENSION));
+                        $sigTemp = tempnam(sys_get_temp_dir(), 'acc_sig_');
+                        file_put_contents($sigTemp, Storage::get($sig->image_path));
+                        $tempSigFiles[] = $sigTemp;
+
+                        $imgType = match ($ext) {
+                            'jpg', 'jpeg' => 'JPEG',
+                            'gif'         => 'GIF',
+                            default       => 'PNG',
+                        };
+
+                        $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
+
+                    } elseif ($type === 'name' && $step->approver) {
+                        $fontSize = max(6, (int) round($h * 0.55));
+                        $pdf->SetFont('Helvetica', 'B', $fontSize);
+                        $pdf->SetTextColor(0, 0, 0);
+                        $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
+                        $pdf->Cell($w, $fontSize, $step->approver->name, 0, 0, 'C');
+                    }
                 }
             }
+
+            $tempOutput = tempnam(sys_get_temp_dir(), 'acc_final_');
+            $pdf->Output($tempOutput, 'F');
+
+            $relPath = "documents/final/{$document->id}.pdf";
+            Storage::put($relPath, file_get_contents($tempOutput));
+
+            $document->update(['final_pdf_path' => $relPath]);
+        } finally {
+            @unlink($tempInput);
+            if ($tempParsable) {
+                @unlink($tempParsable);
+            }
+            if ($tempOutput) {
+                @unlink($tempOutput);
+            }
+            foreach ($tempSigFiles as $f) {
+                @unlink($f);
+            }
+        }
+    }
+
+    private function stampDocumentField(
+        Fpdi $pdf,
+        Document $document,
+        string $type,
+        float $x,
+        float $y,
+        float $w,
+        float $h,
+    ): void {
+        $text = match ($type) {
+            'submitted' => $document->date_atp_submission?->format('d M Y'),
+            'atpdate'   => $document->date_atp_approved?->format('d M Y'),
+            'status'    => AtpStatusLabels::label($document->status_code ?? ''),
+            'punchlist' => $document->atp_punchlist,
+            default     => null,
+        };
+
+        if ($text === null || $text === '') {
+            return;
         }
 
-        $disk    = Storage::disk('local');
-        $relPath = "documents/final/{$document->id}.pdf";
-        $absPath = $disk->path($relPath);
-
-        if (! is_dir(dirname($absPath))) {
-            mkdir(dirname($absPath), 0755, true);
+        // Punchlist: single line, truncate if too long — Cell() doesn't wrap like
+        // MultiCell() does, so pre-truncating avoids overflowing the box.
+        if ($type === 'punchlist' && mb_strlen($text) > 80) {
+            $text = mb_substr($text, 0, 77) . '...';
         }
 
-        $pdf->Output($absPath, 'F');
-
-        $document->update(['final_pdf_path' => $relPath]);
-
-        return $absPath;
+        $fontSize = max(6, (int) round($h * 0.55));
+        $pdf->SetFont('Helvetica', 'B', $fontSize);
+        $pdf->SetTextColor(0, 0, 0);
+        $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
+        $pdf->Cell($w, $fontSize, $text, 0, 0, 'C');
     }
 }
