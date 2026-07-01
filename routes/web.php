@@ -112,6 +112,7 @@ Route::middleware('auth')->group(function () {
     })->name('documents.pdf.previous');
     Route::post('/documents/{id}/reassign',            fn () => redirect()->back())->name('documents.reassign');
     Route::post('/documents/{id}/revise',              [DocumentController::class, 'revise'])->name('documents.revise');
+    Route::post('/documents/{id}/submit',               [DocumentController::class, 'submit'])->name('documents.submit');
     Route::post('/documents/{id}/punchlist-revision',  [DocumentController::class, 'uploadPunchlistRevision'])->name('documents.punchlist-revision');
     Route::post('/documents/{id}/placement',[DocumentController::class, 'placement'])->name('documents.placement');
 

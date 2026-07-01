@@ -161,8 +161,7 @@ class PdfSignatureService
                         $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
 
                     } elseif ($type === 'name' && $step->approver) {
-                        $fontSize = max(6, (int) round($h * 0.55));
-                        $pdf->SetFont('Helvetica', 'B', $fontSize);
+                        $fontSize = $this->fitFontSize($pdf, $step->approver->name, $w, $h);
                         $pdf->SetTextColor(0, 0, 0);
                         $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
                         $pdf->Cell($w, $fontSize, $step->approver->name, 0, 0, 'C');
@@ -212,16 +211,57 @@ class PdfSignatureService
             return;
         }
 
-        // Punchlist: single line, truncate if too long — Cell() doesn't wrap like
-        // MultiCell() does, so pre-truncating avoids overflowing the box.
-        if ($type === 'punchlist' && mb_strlen($text) > 80) {
-            $text = mb_substr($text, 0, 77) . '...';
-        }
-
         $fontSize = max(6, (int) round($h * 0.55));
         $pdf->SetFont('Helvetica', 'B', $fontSize);
+
+        if ($type === 'punchlist') {
+            // Single line, no wrap — Cell() doesn't support it. Truncate to whatever
+            // actually fits the box at this font size, measured directly, instead of
+            // a fixed character count that can still overflow a narrow box.
+            $text = $this->truncateToWidth($pdf, $text, $w);
+        } else {
+            // Fixed-meaning fields (status/dates) must not be cut off — shrink the
+            // font instead until the full text fits the box width.
+            $fontSize = $this->fitFontSize($pdf, $text, $w, $h);
+        }
+
         $pdf->SetTextColor(0, 0, 0);
         $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
         $pdf->Cell($w, $fontSize, $text, 0, 0, 'C');
+    }
+
+    /**
+     * Height-based font size, shrunk further (down to 6pt) until $text fits within $w.
+     * The base size only ever depended on box height — a narrow-but-tall box could
+     * still overflow sideways without this.
+     */
+    private function fitFontSize(Fpdi $pdf, string $text, float $w, float $h): int
+    {
+        $fontSize = max(6, (int) round($h * 0.55));
+        $pdf->SetFont('Helvetica', 'B', $fontSize);
+
+        while ($fontSize > 6 && $pdf->GetStringWidth($text) > $w) {
+            $fontSize--;
+            $pdf->SetFont('Helvetica', 'B', $fontSize);
+        }
+
+        return $fontSize;
+    }
+
+    /**
+     * Truncates $text with an ellipsis until it fits within $w at the PDF's
+     * currently-set font. Caller must SetFont() beforehand.
+     */
+    private function truncateToWidth(Fpdi $pdf, string $text, float $w): string
+    {
+        if ($pdf->GetStringWidth($text) <= $w) {
+            return $text;
+        }
+
+        while (mb_strlen($text) > 1 && $pdf->GetStringWidth($text . '...') > $w) {
+            $text = mb_substr($text, 0, -1);
+        }
+
+        return rtrim($text) . '...';
     }
 }

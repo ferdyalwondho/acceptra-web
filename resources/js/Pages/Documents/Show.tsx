@@ -374,6 +374,38 @@ function ReassignModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/* ── Submit Approval Confirm Modal ──────────────────────────────────────── */
+
+function SubmitApprovalModal({ submitting, onCancel, onConfirm }: { submitting: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onCancel} />
+      <div className="relative z-[410] w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-semibold text-[var(--color-text-primary)]">{t('documents.show.submit_confirm_title')}</h2>
+          <button onClick={onCancel} className="rounded-md p-1 transition-colors hover:bg-[var(--color-bg-subtle)]">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="text-sm text-[var(--color-text-secondary)]">{t('documents.show.submit_confirm_body')}</p>
+        <div className="mt-6 flex justify-end gap-3">
+          <button onClick={onCancel} className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]">
+            {t('documents.show.btn_batal')}
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={submitting}
+            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50"
+          >
+            {submitting ? t('documents.show.submitting') : t('documents.show.submit_confirm_btn_confirm')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Audit Trail Tab ─────────────────────────────────────────────────────── */
 
 type AuditEventType = 'submit' | 'approve' | 'reject' | 'revise' | 'reassign' | 'generate' | 'draft';
@@ -490,12 +522,14 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const isPartner = auth.user?.role === 'partner';
   const isAdmin   = ['admin', 'super_admin'].includes(auth.user?.role ?? '');
 
-  const [activeTab,         setActiveTab]         = useState(initial_tab ?? 'overview');
-  const [showReassign,      setShowReassign]      = useState(false);
-  const [placementSaved,    setPlacementSaved]    = useState(false);
-  const [deletingAtt,       setDeletingAtt]       = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [attachmentDeleted, setAttachmentDeleted] = useState(false);
+  const [activeTab,          setActiveTab]          = useState(initial_tab ?? 'overview');
+  const [showReassign,       setShowReassign]       = useState(false);
+  const [placementSaved,     setPlacementSaved]     = useState(false);
+  const [deletingAtt,        setDeletingAtt]        = useState(false);
+  const [showDeleteConfirm,  setShowDeleteConfirm]  = useState(false);
+  const [attachmentDeleted,  setAttachmentDeleted]  = useState(false);
+  const [showSubmitConfirm,  setShowSubmitConfirm]  = useState(false);
+  const [submittingApproval, setSubmittingApproval] = useState(false);
 
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -513,11 +547,27 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     });
   };
 
+  const handleSubmitApproval = () => {
+    if (submittingApproval) return;
+    setSubmittingApproval(true);
+    router.post(`/documents/${doc.id}/submit`, {}, {
+      onSuccess: () => setShowSubmitConfirm(false),
+      onFinish:  () => setSubmittingApproval(false),
+    });
+  };
+
   const statusCode   = doc.status_code;
   const isDone       = ['13', '16'].includes(statusCode);
-  const canRevise    = ['02', '05', '08', '11', '14'].includes(statusCode);
+  const isDraft      = statusCode === 'draft';
+  const canEdit      = ['02', '05', '08', '11', '14', 'draft'].includes(statusCode);
+  const canReassign  = isAdmin && !['draft', '13', '14', '15', '16'].includes(statusCode);
   const hasPunchlist = ['14', '15', '16'].includes(statusCode);
   const showPlacement = anchor_failed && !placementSaved && !!pdf_url;
+
+  const hasPdf          = !!doc.original_pdf_path;
+  const picsComplete    = doc.approval_steps.filter((s) => s.level_order > 1).every((s) => !!s.approver_id);
+  const canSubmitApproval = isDraft && hasPdf && picsComplete;
+  const rejectedStep    = doc.approval_steps.find((s) => s.status === 'rejected') ?? null;
 
   const projectTitle = doc.link_name ?? doc.site_name_ne ?? doc.pt_index;
 
@@ -596,12 +646,14 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                 {isDone && (
                   <a
                     href={`/documents/${doc.id}/pdf`}
+                    target="_blank"
+                    rel="noreferrer"
                     className="flex h-9 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
                   >
                     <Download className="h-4 w-4" /> {t('documents.show.btn_download_pdf')}
                   </a>
                 )}
-                {isAdmin && (
+                {canReassign && (
                   <button
                     onClick={() => setShowReassign(true)}
                     className="flex h-9 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
@@ -609,13 +661,23 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                     <Users className="h-4 w-4" /> {t('documents.show.btn_reassign')}
                   </button>
                 )}
-                {canRevise && (
+                {canEdit && (
                   <Link
                     href={`/documents/${doc.id}/edit`}
-                    className="flex h-9 items-center gap-1.5 rounded-md bg-brand-ink px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-hover"
+                    className="flex h-9 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
                   >
-                    <RotateCcw className="h-4 w-4" /> {t('documents.show.btn_revisi_pdf')}
+                    <RotateCcw className="h-4 w-4" /> {isDraft ? t('documents.show.btn_edit') : t('documents.show.btn_revisi_pdf')}
                   </Link>
+                )}
+                {isDraft && (
+                  <button
+                    onClick={() => setShowSubmitConfirm(true)}
+                    disabled={!canSubmitApproval}
+                    title={!canSubmitApproval ? t('documents.show.submit_disabled_hint') : undefined}
+                    className="flex h-9 items-center gap-1.5 rounded-md bg-brand-ink px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="h-4 w-4" /> {t('documents.show.btn_submit_approval')}
+                  </button>
                 )}
               </div>
             </div>
@@ -656,7 +718,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                     {t('documents.show.preview_pdf_heading')}
                   </div>
                   {doc.original_pdf_path && (
-                    <a href={`/documents/${doc.id}/pdf`} className="flex items-center gap-1 text-xs font-medium text-ming hover:underline">
+                    <a href={`/documents/${doc.id}/pdf`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs font-medium text-ming hover:underline">
                       <Download className="h-3.5 w-3.5" /> Download
                     </a>
                   )}
@@ -768,6 +830,16 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                       <span className="text-xs text-[var(--color-text-primary)]">{doc.partner.name}</span>
                     </div>
                   )}
+                  {rejectedStep && (
+                    <div className="rounded-md border border-danger/30 bg-danger-surface p-3">
+                      <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-danger">
+                        <XCircle className="h-3.5 w-3.5" /> {t('documents.show.reject_reason_heading', { level: rejectedStep.level_order })}
+                      </p>
+                      <p className="whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">
+                        {rejectedStep.reject_reason}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -861,6 +933,13 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
       </Tabs>
 
       {showReassign && <ReassignModal onClose={() => setShowReassign(false)} />}
+      {showSubmitConfirm && (
+        <SubmitApprovalModal
+          submitting={submittingApproval}
+          onCancel={() => setShowSubmitConfirm(false)}
+          onConfirm={handleSubmitApproval}
+        />
+      )}
     </AppShell>
   );
 }
