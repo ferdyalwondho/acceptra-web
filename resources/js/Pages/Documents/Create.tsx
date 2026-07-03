@@ -69,15 +69,13 @@ export default function DocumentCreate({ templates, partner, partners, defaults,
   const [loadingLevels, setLoadingLevels] = useState(false);
 
   const form = useForm<{
+    unique_id: string;
     vendor_contractor: string;
     pt_index: string;
     project_code: string;
     link_id: string;
     link_name: string;
-    tower_id_ne: string;
-    site_name_ne: string;
-    tower_id_fe: string;
-    site_name_fe: string;
+    cluster_zone: string;
     template_id: string;
     partner_id: string;
     pics: Record<string, string>;
@@ -85,15 +83,13 @@ export default function DocumentCreate({ templates, partner, partners, defaults,
     excel_file: File | null;
     _draft: boolean;
   }>({
+    unique_id: '',
     vendor_contractor: defaults.vendor_contractor,
     pt_index: '',
     project_code: '',
     link_id: '',
     link_name: '',
-    tower_id_ne: '',
-    site_name_ne: '',
-    tower_id_fe: '',
-    site_name_fe: '',
+    cluster_zone: '',
     template_id: '',
     partner_id: partner?.id ?? '',
     pics: {},
@@ -204,11 +200,23 @@ export default function DocumentCreate({ templates, partner, partners, defaults,
             )}
 
             <div className="sm:col-span-2">
+              <Field label={t('documents_create.field_unique_id')} required error={form.errors.unique_id}>
+                <input
+                  type="text"
+                  placeholder={t('documents_create.placeholder_unique_id')}
+                  value={form.data.unique_id}
+                  onChange={(e) => form.setData('unique_id', e.target.value.toUpperCase())}
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+
+            <div className="sm:col-span-2">
               <Field label={t('documents_create.field_vendor')} required error={form.errors.vendor_contractor}>
                 <input
                   type="text"
                   value={form.data.vendor_contractor}
-                  onChange={(e) => form.setData('vendor_contractor', e.target.value)}
+                  onChange={(e) => form.setData('vendor_contractor', e.target.value.toUpperCase())}
                   className={inputCls}
                 />
               </Field>
@@ -220,7 +228,7 @@ export default function DocumentCreate({ templates, partner, partners, defaults,
                   type="text"
                   placeholder={t('documents_create.placeholder_pt_index')}
                   value={form.data.pt_index}
-                  onChange={(e) => form.setData('pt_index', e.target.value)}
+                  onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
                   className={inputCls}
                 />
               </Field>
@@ -231,7 +239,7 @@ export default function DocumentCreate({ templates, partner, partners, defaults,
                 type="text"
                 placeholder="MW-BKS-2406"
                 value={form.data.project_code}
-                onChange={(e) => form.setData('project_code', e.target.value)}
+                onChange={(e) => form.setData('project_code', e.target.value.toUpperCase())}
                 className={inputCls}
               />
             </Field>
@@ -240,7 +248,7 @@ export default function DocumentCreate({ templates, partner, partners, defaults,
                 type="text"
                 placeholder="LNK-001"
                 value={form.data.link_id}
-                onChange={(e) => form.setData('link_id', e.target.value)}
+                onChange={(e) => form.setData('link_id', e.target.value.toUpperCase())}
                 className={inputCls}
               />
             </Field>
@@ -250,48 +258,23 @@ export default function DocumentCreate({ templates, partner, partners, defaults,
                   type="text"
                   placeholder="Microwave Link – Bekasi Sektor 4"
                   value={form.data.link_name}
-                  onChange={(e) => form.setData('link_name', e.target.value)}
+                  onChange={(e) => form.setData('link_name', e.target.value.toUpperCase())}
                   className={inputCls}
                 />
               </Field>
             </div>
 
-            <Field label={t('documents_create.field_tower_id_ne')} error={form.errors.tower_id_ne}>
-              <input
-                type="text"
-                placeholder="TWR-NE-001"
-                value={form.data.tower_id_ne}
-                onChange={(e) => form.setData('tower_id_ne', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label={t('documents_create.field_site_name_ne')} error={form.errors.site_name_ne}>
-              <input
-                type="text"
-                placeholder="Bekasi Industri"
-                value={form.data.site_name_ne}
-                onChange={(e) => form.setData('site_name_ne', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label={t('documents_create.field_tower_id_fe')} error={form.errors.tower_id_fe}>
-              <input
-                type="text"
-                placeholder="TWR-FE-001"
-                value={form.data.tower_id_fe}
-                onChange={(e) => form.setData('tower_id_fe', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label={t('documents_create.field_site_name_fe')} error={form.errors.site_name_fe}>
-              <input
-                type="text"
-                placeholder="Karawang Utara"
-                value={form.data.site_name_fe}
-                onChange={(e) => form.setData('site_name_fe', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
+            <div className="sm:col-span-2">
+              <Field label={t('documents_create.field_cluster_zone')} required error={form.errors.cluster_zone}>
+                <input
+                  type="text"
+                  placeholder={t('documents_create.placeholder_cluster_zone')}
+                  value={form.data.cluster_zone}
+                  onChange={(e) => form.setData('cluster_zone', e.target.value.toUpperCase())}
+                  className={inputCls}
+                />
+              </Field>
+            </div>
           </div>
         </Section>
 

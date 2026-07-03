@@ -73,8 +73,8 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents',        [DocumentController::class, 'index'])->name('documents.index');
     Route::get('/documents/create', [DocumentController::class, 'create'])->name('documents.create');
     Route::post('/documents',       [DocumentController::class, 'store'])->name('documents.store');
-    Route::get('/documents/import',  [DocumentController::class, 'importCreate'])->name('documents.import');
-    Route::post('/documents/import', [DocumentController::class, 'importStore'])->name('documents.import.store');
+    Route::get('/documents/submit-ongoing',  [DocumentController::class, 'submitOngoingCreate'])->name('documents.submit-ongoing');
+    Route::post('/documents/submit-ongoing', [DocumentController::class, 'submitOngoingStore'])->name('documents.submit-ongoing.store');
     Route::get('/documents/export', DocumentExportController::class)->name('documents.export');
 
     Route::get('/documents/{id}',           [DocumentController::class, 'show'])->name('documents.show');
@@ -110,7 +110,7 @@ Route::middleware('auth')->group(function () {
             ['Content-Type' => 'application/pdf']
         );
     })->name('documents.pdf.previous');
-    Route::post('/documents/{id}/reassign',            fn () => redirect()->back())->name('documents.reassign');
+    Route::post('/documents/{id}/reassign',            [DocumentController::class, 'reassign'])->name('documents.reassign');
     Route::post('/documents/{id}/revise',              [DocumentController::class, 'revise'])->name('documents.revise');
     Route::post('/documents/{id}/submit',               [DocumentController::class, 'submit'])->name('documents.submit');
     Route::post('/documents/{id}/punchlist-revision',  [DocumentController::class, 'uploadPunchlistRevision'])->name('documents.punchlist-revision');

@@ -15,10 +15,7 @@ interface DraftDoc {
   project_code: string;
   link_id: string;
   link_name: string;
-  tower_id_ne: string;
-  site_name_ne: string;
-  tower_id_fe: string;
-  site_name_fe: string;
+  cluster_zone: string;
   template_id: string;
   has_pdf: boolean;
   partner_id: string;
@@ -102,15 +99,13 @@ export default function DocumentEdit({
   const [loadingLevels, setLoadingLevels] = useState(false);
 
   const form = useForm<{
+    unique_id: string;
     vendor_contractor: string;
     pt_index: string;
     project_code: string;
     link_id: string;
     link_name: string;
-    tower_id_ne: string;
-    site_name_ne: string;
-    tower_id_fe: string;
-    site_name_fe: string;
+    cluster_zone: string;
     template_id: string;
     partner_id: string;
     pics: Record<string, string>;
@@ -118,15 +113,13 @@ export default function DocumentEdit({
     excel_file: File | null;
     _draft: boolean;
   }>({
+    unique_id:          doc.unique_id,
     vendor_contractor: doc.vendor_contractor,
     pt_index:          doc.pt_index,
     project_code:      doc.project_code,
     link_id:           doc.link_id,
     link_name:         doc.link_name,
-    tower_id_ne:       doc.tower_id_ne,
-    site_name_ne:      doc.site_name_ne,
-    tower_id_fe:       doc.tower_id_fe,
-    site_name_fe:      doc.site_name_fe,
+    cluster_zone:      doc.cluster_zone,
     template_id:       doc.template_id,
     partner_id:        doc.partner_id,
     pics:              doc.pics ?? {},
@@ -326,6 +319,17 @@ export default function DocumentEdit({
         {/* ─── 1. Metadata ─── */}
         <Section step={1} title="Metadata Dokumen">
           <div className="grid gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <Field label="Unique ID">
+                <input
+                  type="text"
+                  value={form.data.unique_id}
+                  className={lockedInputCls}
+                  disabled
+                />
+              </Field>
+            </div>
+
             {is_admin_submit && (
               <div className="sm:col-span-2">
                 <Field label="Partner / Subkontraktor" required error={form.errors.partner_id}>
@@ -349,7 +353,7 @@ export default function DocumentEdit({
                 <input
                   type="text"
                   value={form.data.vendor_contractor}
-                  onChange={(e) => form.setData('vendor_contractor', e.target.value)}
+                  onChange={(e) => form.setData('vendor_contractor', e.target.value.toUpperCase())}
                   className={is_rejected_revision ? lockedInputCls : inputCls}
                   disabled={is_rejected_revision}
                 />
@@ -362,7 +366,7 @@ export default function DocumentEdit({
                   type="text"
                   placeholder="mis. PT.2024.001"
                   value={form.data.pt_index}
-                  onChange={(e) => form.setData('pt_index', e.target.value)}
+                  onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
                   className={is_rejected_revision ? lockedInputCls : inputCls}
                   disabled={is_rejected_revision}
                 />
@@ -374,7 +378,7 @@ export default function DocumentEdit({
                 type="text"
                 placeholder="MW-BKS-2406"
                 value={form.data.project_code}
-                onChange={(e) => form.setData('project_code', e.target.value)}
+                onChange={(e) => form.setData('project_code', e.target.value.toUpperCase())}
                 className={is_rejected_revision ? lockedInputCls : inputCls}
                 disabled={is_rejected_revision}
               />
@@ -384,7 +388,7 @@ export default function DocumentEdit({
                 type="text"
                 placeholder="LNK-001"
                 value={form.data.link_id}
-                onChange={(e) => form.setData('link_id', e.target.value)}
+                onChange={(e) => form.setData('link_id', e.target.value.toUpperCase())}
                 className={is_rejected_revision ? lockedInputCls : inputCls}
                 disabled={is_rejected_revision}
               />
@@ -395,53 +399,24 @@ export default function DocumentEdit({
                   type="text"
                   placeholder="Microwave Link – Bekasi Sektor 4"
                   value={form.data.link_name}
-                  onChange={(e) => form.setData('link_name', e.target.value)}
+                  onChange={(e) => form.setData('link_name', e.target.value.toUpperCase())}
                   className={is_rejected_revision ? lockedInputCls : inputCls}
                   disabled={is_rejected_revision}
                 />
               </Field>
             </div>
 
-            <Field label="Tower ID Near End" error={form.errors.tower_id_ne}>
-              <input
-                type="text"
-                placeholder="TWR-NE-001"
-                value={form.data.tower_id_ne}
-                onChange={(e) => form.setData('tower_id_ne', e.target.value)}
-                className={is_rejected_revision ? lockedInputCls : inputCls}
-                disabled={is_rejected_revision}
-              />
-            </Field>
-            <Field label="Site Name Near End" error={form.errors.site_name_ne}>
-              <input
-                type="text"
-                placeholder="Bekasi Industri"
-                value={form.data.site_name_ne}
-                onChange={(e) => form.setData('site_name_ne', e.target.value)}
-                className={is_rejected_revision ? lockedInputCls : inputCls}
-                disabled={is_rejected_revision}
-              />
-            </Field>
-            <Field label="Tower ID Far End" error={form.errors.tower_id_fe}>
-              <input
-                type="text"
-                placeholder="TWR-FE-001"
-                value={form.data.tower_id_fe}
-                onChange={(e) => form.setData('tower_id_fe', e.target.value)}
-                className={is_rejected_revision ? lockedInputCls : inputCls}
-                disabled={is_rejected_revision}
-              />
-            </Field>
-            <Field label="Site Name Far End" error={form.errors.site_name_fe}>
-              <input
-                type="text"
-                placeholder="Karawang Utara"
-                value={form.data.site_name_fe}
-                onChange={(e) => form.setData('site_name_fe', e.target.value)}
-                className={is_rejected_revision ? lockedInputCls : inputCls}
-                disabled={is_rejected_revision}
-              />
-            </Field>
+            <div className="sm:col-span-2">
+              <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
+                <input
+                  type="text"
+                  value={form.data.cluster_zone}
+                  onChange={(e) => form.setData('cluster_zone', e.target.value.toUpperCase())}
+                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  disabled={is_rejected_revision}
+                />
+              </Field>
+            </div>
           </div>
         </Section>
 

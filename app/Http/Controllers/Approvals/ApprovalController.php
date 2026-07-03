@@ -105,7 +105,7 @@ class ApprovalController extends Controller
                 return [
                     'id'         => $doc->id,
                     'uniqueId'   => $doc->unique_id,
-                    'project'    => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+                    'project'    => $doc->link_name ?? $doc->pt_index,
                     'sow'        => $doc->sow_name,
                     'statusCode' => $doc->status_code,
                     'myAction'   => $actionLabels[$myStep?->status] ?? $myStep?->status ?? '—',
@@ -174,7 +174,7 @@ class ApprovalController extends Controller
         $doc = [
             'id'                => $document->id,
             'uniqueId'          => $document->unique_id,
-            'project'           => $document->link_name ?? $document->site_name_ne ?? $document->pt_index,
+            'project'           => $document->link_name ?? $document->pt_index,
             'sow'               => $document->sow_name,
             'statusCode'        => $document->status_code,
             'requiresSignature' => (bool) ($activeStep?->requires_signature ?? false),
@@ -353,10 +353,14 @@ class ApprovalController extends Controller
                 ? 'step.approved_with_punchlist'
                 : 'step.approved';
 
+            $description = $action === 'approve_with_punchlist'
+                ? "Step L{$activeStep->level_order} approved with punchlist by {$user->name}: {$request->input('punchlist_notes')}"
+                : "Step L{$activeStep->level_order} approved by {$user->name}";
+
             AuditService::log(
                 $document->id,
                 $eventName,
-                "Step L{$activeStep->level_order} {$eventName} by {$user->name}",
+                $description,
                 ['level' => $activeStep->level_order],
                 $user->id,
             );
@@ -469,7 +473,7 @@ class ApprovalController extends Controller
         return [
             'id'          => $doc->id,
             'uniqueId'    => $doc->unique_id,
-            'project'     => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+            'project'     => $doc->link_name ?? $doc->pt_index,
             'sow'         => $doc->sow_name,
             'partner'     => $doc->partner?->name,
             'statusCode'  => $doc->status_code,

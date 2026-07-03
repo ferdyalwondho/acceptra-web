@@ -149,8 +149,8 @@ export interface TemplateLevelOption {
   requires_signature: boolean;
 }
 
-// FR-IMP: Per-level data for document import form
-export interface ImportLevel {
+// Per-level data for the "submit existing document" (offline approval) form
+export interface OfflineLevel {
   level_order: number;
   is_offline: boolean;
   approver_name: string;      // required if offline
@@ -188,6 +188,7 @@ export interface ApprovalStepRecord {
   is_active: boolean;
   action_at: string | null;
   reject_reason: string | null;
+  punchlist_notes: string | null;
 }
 
 export interface ExcelAttachment {
@@ -251,8 +252,8 @@ export interface ApprovalStageEntry {
   count: number;
 }
 
-export interface MonthlyTrendEntry {
-  month: string;
+export interface WeeklyTrendEntry {
+  week: string;
   count: number;
 }
 
@@ -305,10 +306,7 @@ export interface DocumentRecord {
   project_code: string | null;
   link_id: string | null;
   link_name: string | null;
-  tower_id_ne: string | null;
-  site_name_ne: string | null;
-  tower_id_fe: string | null;
-  site_name_fe: string | null;
+  cluster_zone: string | null;
   sow_name: string;
   status_code: string;
   date_atp_submission: string | null;
