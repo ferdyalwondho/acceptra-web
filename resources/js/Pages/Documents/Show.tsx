@@ -335,8 +335,57 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
 
 /* ── Reassign Modal ─────────────────────────────────────────────────────── */
 
-function ReassignModal({ onClose }: { onClose: () => void }) {
+function ReassignModal({
+  documentId, steps, onClose,
+}: {
+  documentId: string;
+  steps: DocumentRecord['approval_steps'];
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
+  const [levelOrder,    setLevelOrder]    = useState('');
+  const [newApproverId, setNewApproverId] = useState('');
+  const [reason,        setReason]        = useState('');
+  const [evidenceFile,  setEvidenceFile]  = useState<File | null>(null);
+  const [approvers,     setApprovers]     = useState<Array<{ id: string; name: string }>>([]);
+  const [loadingApprovers, setLoadingApprovers] = useState(false);
+  const [submitting,    setSubmitting]    = useState(false);
+  const [errors,        setErrors]        = useState<Record<string, string>>({});
+
+  const reassignableSteps = steps.filter((s) => s.level_order > 1 && s.status === 'pending');
+  const selectedStep      = reassignableSteps.find((s) => String(s.level_order) === levelOrder);
+
+  useEffect(() => {
+    setNewApproverId('');
+    setApprovers([]);
+    if (!selectedStep) return;
+
+    setLoadingApprovers(true);
+    axios
+      .get<{ data: Array<{ id: string; name: string }> }>(`/api/users?role=${selectedStep.role}`)
+      .then(({ data }) => setApprovers(data.data))
+      .catch(() => setApprovers([]))
+      .finally(() => setLoadingApprovers(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [levelOrder]);
+
+  function handleSubmit() {
+    if (submitting) return;
+    setSubmitting(true);
+    setErrors({});
+    router.post(`/documents/${documentId}/reassign`, {
+      level_order: levelOrder,
+      new_approver_id: newApproverId,
+      reason,
+      evidence_file: evidenceFile,
+    }, {
+      forceFormData: true,
+      onSuccess: onClose,
+      onError: (e) => setErrors(e as Record<string, string>),
+      onFinish: () => setSubmitting(false),
+    });
+  }
+
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onClose} />
@@ -349,25 +398,84 @@ function ReassignModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">{t('documents.show.reassign_level')}</label>
-            <select className={inputCls}><option>{t('documents.show.reassign_level_placeholder')}</option></select>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+              {t('documents.show.reassign_level')} <span className="text-danger">*</span>
+            </label>
+            <select value={levelOrder} onChange={(e) => setLevelOrder(e.target.value)} className={inputCls}>
+              <option value="">{t('documents.show.reassign_level_placeholder')}</option>
+              {reassignableSteps.map((s) => (
+                <option key={s.level_order} value={s.level_order}>
+                  L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}
+                </option>
+              ))}
+            </select>
+            {errors.level_order && <p className="mt-1 text-xs text-danger">{errors.level_order}</p>}
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
               {t('documents.show.reassign_approver_baru')} <span className="text-danger">*</span>
             </label>
-            <select className={inputCls}><option value="">— pilih approver —</option></select>
+            <select
+              value={newApproverId}
+              onChange={(e) => setNewApproverId(e.target.value)}
+              className={inputCls}
+              disabled={!selectedStep || loadingApprovers}
+            >
+              <option value="">{t('documents.show.reassign_approver_placeholder')}</option>
+              {approvers.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+            {errors.new_approver_id && <p className="mt-1 text-xs text-danger">{errors.new_approver_id}</p>}
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
               {t('documents.show.reassign_alasan')} <span className="text-danger">*</span>
             </label>
-            <textarea rows={3} className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40" />
+            <textarea
+              rows={3}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+            />
+            {errors.reason && <p className="mt-1 text-xs text-danger">{errors.reason}</p>}
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+              {t('documents.show.reassign_bukti')}
+            </label>
+            {evidenceFile ? (
+              <div className="flex h-9 items-center gap-2 rounded-sm border border-[var(--color-border-strong)] bg-white px-3">
+                <Paperclip className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">{evidenceFile.name}</span>
+                <button type="button" onClick={() => setEvidenceFile(null)} className="shrink-0 text-[var(--color-text-secondary)] hover:text-danger">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <label className="flex h-9 cursor-pointer items-center gap-2 rounded-sm border border-dashed border-[var(--color-border-strong)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-brand hover:text-brand-ink">
+                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                <span>{t('documents.show.reassign_bukti_upload')}</span>
+                <input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png"
+                  className="sr-only"
+                  onChange={(e) => setEvidenceFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            )}
+            {errors.evidence_file && <p className="mt-1 text-xs text-danger">{errors.evidence_file}</p>}
           </div>
         </div>
         <div className="mt-6 flex justify-end gap-3">
           <button onClick={onClose} className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]">{t('documents.show.reassign_btn_batal')}</button>
-          <button onClick={onClose} className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white hover:bg-brand-hover">{t('documents.show.reassign_btn_simpan')}</button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !levelOrder || !newApproverId || !reason}
+            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+          >
+            {submitting ? t('documents.show.submitting') : t('documents.show.reassign_btn_simpan')}
+          </button>
         </div>
       </div>
     </div>
@@ -442,7 +550,7 @@ function getAuditEventLabel(log: AuditLogEntry, t: (k: string, opts?: object) =>
   return label;
 }
 
-function AuditTrailTab({ logs }: { logs: AuditLogEntry[] }) {
+function AuditTrailTab({ logs, documentId }: { logs: AuditLogEntry[]; documentId: string }) {
   const { t } = useTranslation();
   const reversed = [...logs].reverse();
 
@@ -500,6 +608,14 @@ function AuditTrailTab({ logs }: { logs: AuditLogEntry[] }) {
                   <p className="mt-2 rounded-md bg-[var(--color-bg-subtle)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
                     {log.description}
                   </p>
+                )}
+                {typeof log.metadata?.attachment_id === 'string' && (
+                  <a
+                    href={`/documents/${documentId}/attachments/${log.metadata.attachment_id}/download`}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-ming hover:underline"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" /> {t('documents.show.audit_attachment_download')}
+                  </a>
                 )}
               </div>
             </li>
@@ -561,15 +677,15 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const isDraft      = statusCode === 'draft';
   const canEdit      = ['02', '05', '08', '11', '14', 'draft'].includes(statusCode);
   const canReassign  = isAdmin && !['draft', '13', '14', '15', '16'].includes(statusCode);
-  const hasPunchlist = ['14', '15', '16'].includes(statusCode);
   const showPlacement = anchor_failed && !placementSaved && !!pdf_url;
 
   const hasPdf          = !!doc.original_pdf_path;
   const picsComplete    = doc.approval_steps.filter((s) => s.level_order > 1).every((s) => !!s.approver_id);
   const canSubmitApproval = isDraft && hasPdf && picsComplete;
   const rejectedStep    = doc.approval_steps.find((s) => s.status === 'rejected') ?? null;
+  const punchlistSteps  = doc.approval_steps.filter((s) => s.status === 'approved_with_punchlist' && !!s.punchlist_notes);
 
-  const projectTitle = doc.link_name ?? doc.site_name_ne ?? doc.pt_index;
+  const projectTitle = doc.link_name ?? doc.pt_index;
 
   const timelineSteps: TimelineStep[] = doc.approval_steps.map((s) => ({
     id:                s.id,
@@ -591,10 +707,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     { label: 'Project Code',      value: doc.project_code ?? '—' },
     { label: 'Link ID',           value: doc.link_id ?? '—' },
     { label: 'Link Name',         value: doc.link_name ?? '—' },
-    { label: 'Tower ID (NE)',     value: doc.tower_id_ne ?? '—' },
-    { label: 'Site Name (NE)',    value: doc.site_name_ne ?? '—' },
-    { label: 'Tower ID (FE)',     value: doc.tower_id_fe ?? '—' },
-    { label: 'Site Name (FE)',    value: doc.site_name_fe ?? '—' },
+    { label: 'Cluster Zone',      value: doc.cluster_zone ?? '—' },
     { label: t('documents.show.field_submit_date'),  value: formatDate(doc.date_atp_submission) ?? '—' },
     { label: 'Partner',                               value: doc.partner?.name ?? '—' },
     { label: t('documents.show.field_submitted_by'), value: doc.submitter?.name ?? '—' },
@@ -770,15 +883,28 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                     ))}
                   </div>
 
-                  {hasPunchlist && (
+                  {punchlistSteps.length > 0 && (
                     <div className="mt-5 rounded-lg border border-warning/30 bg-warning-surface p-4">
                       <div className="mb-2 flex items-center gap-2">
                         <AlertTriangle className="h-4 w-4 text-warning" />
                         <span className="text-sm font-semibold text-warning">{t('documents.show.punchlist_heading')}</span>
                       </div>
-                      <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
-                        {doc.atp_punchlist ?? '—'}
-                      </p>
+                      {isPartner ? (
+                        <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
+                          {punchlistSteps.map((s) => s.punchlist_notes).join('\n\n')}
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {punchlistSteps.map((s) => (
+                            <p key={s.id} className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
+                              <span className="font-semibold">
+                                L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}:
+                              </span>{' '}
+                              {s.punchlist_notes}
+                            </p>
+                          ))}
+                        </div>
+                      )}
                       {statusCode === '14' && isAdmin && (
                         <Link
                           href={`/documents/${doc.id}/edit`}
@@ -928,11 +1054,17 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
 
         {/* ── Tab: Audit Trail ── */}
         <TabsContent value="audit-trail">
-          <AuditTrailTab logs={audit_logs} />
+          <AuditTrailTab logs={audit_logs} documentId={doc.id} />
         </TabsContent>
       </Tabs>
 
-      {showReassign && <ReassignModal onClose={() => setShowReassign(false)} />}
+      {showReassign && (
+        <ReassignModal
+          documentId={doc.id}
+          steps={doc.approval_steps}
+          onClose={() => setShowReassign(false)}
+        />
+      )}
       {showSubmitConfirm && (
         <SubmitApprovalModal
           submitting={submittingApproval}

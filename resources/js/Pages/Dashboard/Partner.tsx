@@ -1,4 +1,4 @@
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
@@ -7,12 +7,15 @@ import {
 import AppShell, { PageHeader } from '@/layouts/AppShell';
 import { Upload, FileText, CheckCircle2, Clock, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { PartnerSummary, PartnerDoc, MonthlyTrendEntry } from '@/types';
+import type { PartnerSummary, PartnerDoc, WeeklyTrendEntry } from '@/types';
 
 interface Props {
   summary: PartnerSummary;
   documents: PartnerDoc[];
-  monthly_trend: MonthlyTrendEntry[];
+  weekly_trend: WeeklyTrendEntry[];
+  selected_month: number;
+  selected_year: number;
+  available_years: number[];
 }
 
 const STATUS_COLORS = {
@@ -21,8 +24,33 @@ const STATUS_COLORS = {
   completed: '#3B6D11',
 } as const;
 
-export default function DashboardPartner({ summary, documents, monthly_trend }: Props) {
-  const { t } = useTranslation();
+export default function DashboardPartner({
+  summary, documents, weekly_trend, selected_month, selected_year, available_years,
+}: Props) {
+  const { t, i18n } = useTranslation();
+
+  const monthOptions = Array.from({ length: 12 }, (_, i) => ({
+    value: i + 1,
+    label: new Date(2000, i, 1).toLocaleDateString(i18n.language === 'id' ? 'id-ID' : 'en-US', { month: 'long' }),
+  }));
+
+  function handleTrendMonthChange(month: number) {
+    router.get(window.location.pathname, { month, year: selected_year }, {
+      only: ['weekly_trend', 'selected_month', 'selected_year'],
+      preserveState: true,
+      preserveScroll: true,
+      replace: true,
+    });
+  }
+
+  function handleTrendYearChange(year: number) {
+    router.get(window.location.pathname, { month: selected_month, year }, {
+      only: ['weekly_trend', 'selected_month', 'selected_year'],
+      preserveState: true,
+      preserveScroll: true,
+      replace: true,
+    });
+  }
 
   const summaryCards = [
     { label: t('partner_dashboard.card_total'),     value: summary.total,     icon: <Layers className="h-4 w-4" />,       href: '/documents?scope=mine' },
@@ -139,19 +167,39 @@ export default function DashboardPartner({ summary, documents, monthly_trend }: 
           </div>
         </div>
 
-        {/* Bar chart — Monthly submission trend */}
+        {/* Bar chart — Weekly submission trend within selected month */}
         <div className="lg:col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xs">
-          <div className="border-b border-[var(--color-border)] px-5 py-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] px-5 py-3.5">
             <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
               {t('partner_dashboard.chart_monthly_title')}
             </h2>
+            <div className="flex items-center gap-2">
+              <select
+                value={selected_month}
+                onChange={(e) => handleTrendMonthChange(Number(e.target.value))}
+                className="h-8 rounded-sm border border-[var(--color-border-strong)] bg-white px-2 text-xs focus:border-brand focus:outline-none"
+              >
+                {monthOptions.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+              <select
+                value={selected_year}
+                onChange={(e) => handleTrendYearChange(Number(e.target.value))}
+                className="h-8 rounded-sm border border-[var(--color-border-strong)] bg-white px-2 text-xs focus:border-brand focus:outline-none"
+              >
+                {available_years.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="px-4 py-4">
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={monthly_trend} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+              <BarChart data={weekly_trend} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border, #e5e7eb)" vertical={false} />
                 <XAxis
-                  dataKey="month"
+                  dataKey="week"
                   tick={{ fontSize: 11, fill: 'var(--color-text-secondary, #6b7280)' }}
                   axisLine={false}
                   tickLine={false}

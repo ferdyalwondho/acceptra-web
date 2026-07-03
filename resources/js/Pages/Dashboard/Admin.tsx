@@ -1,4 +1,4 @@
-import { Head, Link, usePage } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
@@ -11,7 +11,7 @@ import { FileText, CheckCircle2, AlertTriangle, Clock, Plus, Activity, FileClock
 import { cn } from '@/lib/utils';
 import type {
   PageProps, AdminMetrics, ActiveDoc, OverdueDoc, ActivityEntry,
-  ApprovalStageEntry, MonthlyTrendEntry, TopPartnerEntry,
+  ApprovalStageEntry, WeeklyTrendEntry, TopPartnerEntry,
 } from '@/types';
 
 interface Props {
@@ -20,7 +20,10 @@ interface Props {
   overdue_approvals: OverdueDoc[];
   recent_activity: ActivityEntry[];
   approval_stage_breakdown: ApprovalStageEntry[];
-  monthly_trend: MonthlyTrendEntry[];
+  weekly_trend: WeeklyTrendEntry[];
+  selected_month: number;
+  selected_year: number;
+  available_years: number[];
   top_partners: TopPartnerEntry[];
 }
 
@@ -35,11 +38,35 @@ const STAGE_COLORS = ['#185FA5', '#55AA39', '#854F0B', '#A32D2D'];
 
 export default function DashboardAdmin({
   metrics, active_documents, overdue_approvals, recent_activity,
-  approval_stage_breakdown, monthly_trend, top_partners,
+  approval_stage_breakdown, weekly_trend, selected_month, selected_year,
+  available_years, top_partners,
 }: Props) {
   const { auth } = usePage<PageProps>().props;
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const isViewer = auth.user?.role === 'viewer';
+
+  const monthOptions = Array.from({ length: 12 }, (_, i) => ({
+    value: i + 1,
+    label: new Date(2000, i, 1).toLocaleDateString(i18n.language === 'id' ? 'id-ID' : 'en-US', { month: 'long' }),
+  }));
+
+  function handleTrendMonthChange(month: number) {
+    router.get(window.location.pathname, { month, year: selected_year }, {
+      only: ['weekly_trend', 'selected_month', 'selected_year'],
+      preserveState: true,
+      preserveScroll: true,
+      replace: true,
+    });
+  }
+
+  function handleTrendYearChange(year: number) {
+    router.get(window.location.pathname, { month: selected_month, year }, {
+      only: ['weekly_trend', 'selected_month', 'selected_year'],
+      preserveState: true,
+      preserveScroll: true,
+      replace: true,
+    });
+  }
 
   const metricCards = [
     {
@@ -244,19 +271,39 @@ export default function DashboardAdmin({
           </div>
         </div>
 
-        {/* Bar chart — Monthly trend */}
+        {/* Bar chart — Weekly trend within selected month */}
         <div className="lg:col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xs">
-          <div className="border-b border-[var(--color-border)] px-5 py-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] px-5 py-3.5">
             <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
               {t('admin_dashboard.chart_monthly_title')}
             </h2>
+            <div className="flex items-center gap-2">
+              <select
+                value={selected_month}
+                onChange={(e) => handleTrendMonthChange(Number(e.target.value))}
+                className="h-8 rounded-sm border border-[var(--color-border-strong)] bg-white px-2 text-xs focus:border-brand focus:outline-none"
+              >
+                {monthOptions.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+              <select
+                value={selected_year}
+                onChange={(e) => handleTrendYearChange(Number(e.target.value))}
+                className="h-8 rounded-sm border border-[var(--color-border-strong)] bg-white px-2 text-xs focus:border-brand focus:outline-none"
+              >
+                {available_years.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="px-4 py-4">
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={monthly_trend} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+              <BarChart data={weekly_trend} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border, #e5e7eb)" vertical={false} />
                 <XAxis
-                  dataKey="month"
+                  dataKey="week"
                   tick={{ fontSize: 11, fill: 'var(--color-text-secondary, #6b7280)' }}
                   axisLine={false}
                   tickLine={false}

@@ -27,7 +27,7 @@ export default function DocumentsIndex({ documents, filters, partners, can_expor
   const role = auth.user?.role ?? '';
 
   const canSubmit = ['partner', 'admin', 'super_admin'].includes(role);
-  const canImport = ['admin', 'super_admin'].includes(role);
+  const canSubmitOngoing = ['admin', 'super_admin'].includes(role);
 
   const [search, setSearch]     = useState(filters.search ?? '');
   const [statusCode, setStatus] = useState(filters.status_code ?? '');
@@ -157,12 +157,12 @@ export default function DocumentsIndex({ documents, filters, partners, can_expor
         action={
           <div className="flex flex-wrap items-center gap-2">
             {can_export && <ExportExcelButton href={buildExportUrl()} />}
-            {canImport && (
+            {canSubmitOngoing && (
               <Link
-                href="/documents/import"
+                href="/documents/submit-ongoing"
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--color-border-strong)] bg-white px-4 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
               >
-                {t('documents.btn_import')}
+                {t('documents.btn_submit_ongoing')}
               </Link>
             )}
             {canSubmit && (
