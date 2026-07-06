@@ -18,18 +18,20 @@ cd /var/www/acceptra   # sesuaikan path server Anda
 git pull origin main   # atau branch yang sesuai
 ```
 
-Untuk update ini: **tidak ada migration baru** dan **tidak ada perubahan composer.json/npm** — jadi `php artisan migrate`, rebuild image, dan `npm run build` semuanya bisa dilewati. Yang penting `public/templates/user_import_template.xlsx` (file statis biasa) ikut ter-deploy bersama kode — cek dengan:
+Untuk update ini: **tidak ada migration baru** dan **tidak ada perubahan composer.json/npm** — jadi `php artisan migrate`, rebuild image, dan `npm run build` semuanya bisa dilewati. Yang penting `public/exports/user_import_template.xlsx` (file statis biasa) ikut ter-deploy bersama kode — cek dengan:
 
 ```bash
-ls -la public/templates/user_import_template.xlsx
+ls -la public/exports/user_import_template.xlsx
 ```
+
+> File ini sengaja ditaruh di `public/exports/`, bukan `public/templates/` — folder `public/templates/` pernah dipakai dan bikin nginx balikin 403 di route `/templates` (halaman Template/SOW), karena `try_files $uri $uri/ ...` nemu folder fisik itu duluan sebelum sempat fallback ke `index.php`. Jangan taruh file statis apapun di `public/` dengan nama folder yang sama dengan segment pertama route Laravel manapun (`templates`, `users`, `documents`, dst).
 
 ## 2. Ambil template, kirim ke admin untuk diisi
 
 Karena file-nya ada di `public/`, bisa langsung diakses lewat browser tanpa perlu route/fitur tambahan:
 
 ```
-https://domain-anda.com/templates/user_import_template.xlsx
+https://domain-anda.com/exports/user_import_template.xlsx
 ```
 
 Download, kirim ke admin untuk diisi. Format kolom (lihat juga sheet "Referensi Role" di dalam file itu sendiri):
