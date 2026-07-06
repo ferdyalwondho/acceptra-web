@@ -6,9 +6,28 @@ Panduan ini untuk **update** staging server yang sudah jalan (bukan setup dari n
 
 ---
 
+## Ringkasan untuk update kali ini (`dev` @ `541a379`, PR #17 → #18)
+
+Perubahan: perbaikan alur draft/submit dokumen, tanda tangan approver yang hilang saat reject→resubmit, punchlist verification yang tidak muncul di list approval/dashboard, dan ukuran font overlay PDF (Status/Punchlist). Detail lengkap ada di PR [#17](https://github.com/ferdyalwondho/acceptra-web/pull/17).
+
+Dicek dari diff `origin/main..origin/dev` — hanya `app/` (PHP) dan `resources/js/` (frontend) yang berubah:
+
+| Langkah | Perlu dijalankan? |
+|---|---|
+| 3. Rebuild image | **Tidak** — `docker/php/Dockerfile` tidak berubah |
+| 4. `composer install` | **Tidak** — `composer.json`/`composer.lock` tidak berubah |
+| 5. `npm ci && npm run build` | **Ya** — banyak file `resources/js/**` berubah |
+| 6. `php artisan migrate` | **Tidak** — tidak ada file baru di `database/migrations/` |
+| 7. Refresh cache | **Ya** — ada route baru (`documents.submit`) di `routes/web.php` |
+| 8. Restart `app`, `queue`, `scheduler` | **Ya, ketiganya** — lihat catatan penting di langkah 8 |
+
+Kalau update berikutnya beda isinya, cek ulang tabel ini pakai `git diff origin/main..origin/dev --stat` dan sesuaikan.
+
+---
+
 ## 0. Sebelum mulai — backup
 
-Jangan skip ini. Migration di update terakhir mengubah skema tabel `users` dan `documents`.
+Jangan skip ini walau update kali ini tidak membawa migration baru — tetap backup sebagai jaring pengaman standar sebelum pull kode baru ke staging.
 
 ```bash
 cd /var/www/acceptra   # sesuaikan path staging Anda
@@ -77,9 +96,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec app npm run
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec app php artisan migrate --force
 ```
 
-Migration yang perlu jalan di update ini (contoh dari perubahan terakhir — cek `git log` untuk daftar migration terbaru sebenarnya):
-- `add_previous_pdf_to_documents_table` — kolom untuk fitur banding PDF lama-vs-revisi di layar approval.
-- `add_has_seen_get_started_to_users_table` — kolom untuk modal "Get Started".
+**Update kali ini tidak ada migration baru** (`git diff origin/main..origin/dev -- database/migrations/` kosong) — langkah ini boleh dilewati. Tetap jalankan perintah di atas kalau ragu; `migrate` aman dipanggil berkali-kali (no-op kalau tidak ada yang pending).
 
 Cek semua migration sudah jalan:
 ```bash
@@ -98,13 +115,16 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec app php art
 
 > Kalau ada perubahan di `.env` (env var baru), jalankan `config:clear` dulu baru `config:cache` — kalau cuma `config:cache` saja tanpa clear, nilai lama yang sudah ke-cache bisa masih kepakai.
 
-## 8. Restart queue worker & scheduler
+## 8. Restart `app`, queue worker, scheduler & nginx
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml restart queue scheduler
+docker compose -f docker-compose.yml -f docker-compose.prod.yml restart app queue scheduler nginx
 ```
 
-> **Wajib**, bukan opsional. `queue:work` itu proses PHP yang jalan terus-menerus (long-running) — dia memuat kode aplikasi sekali saat start dan tidak otomatis reload walau file berubah di disk. Kalau tidak di-restart, job yang diproses di background (notifikasi, dsb.) masih pakai kode versi lama.
+> **Keempatnya wajib**, bukan cuma `queue scheduler`. Alasannya beda-beda:
+> - `queue` & `scheduler` menjalankan proses PHP yang long-running (`queue:work`, loop `schedule:run`) — kode aplikasi dimuat sekali saat start dan tidak reload otomatis walau file di disk berubah. Kalau tidak di-restart, job background (notifikasi, dsb.) masih pakai kode versi lama.
+> - `app` (PHP-FPM, yang melayani request web) **juga wajib** kalau staging pakai `PHP_INI=prod.ini` — cek `docker/php/prod.ini`, di situ `opcache.validate_timestamps = 0`. Artinya OPcache tidak mengecek apakah file berubah di disk sama sekali; ia terus menyajikan bytecode lama yang sudah di-cache sampai proses PHP-FPM-nya direstart. Ini beda dengan `local.ini` (dipakai kalau `PHP_INI` tidak di-set) yang `validate_timestamps = 1` — auto-reload tiap ada perubahan file, tapi lebih lambat sehingga tidak dipakai di production. **Kalau langkah ini di-skip, seluruh perbaikan kode di update ini tidak akan pernah kepakai user, walau `git pull` sudah sukses dan container `app` tetap `Up`.**
+> - **`nginx` juga wajib direstart setiap kali container `app` di-recreate** (`docker compose ... up -d` atau `restart app` — bukan cuma reload config). `docker/nginx/prod.conf` dan `docker/nginx/default.conf` pakai `fastcgi_pass app:9000;` sebagai hostname literal tanpa `resolver` directive — nginx me-resolve nama `app` ke IP container **cuma sekali saat nginx start**, lalu IP itu di-cache selama proses nginx berjalan. Kalau container `app` di-recreate (dapat IP baru di Docker network) tapi nginx tidak ikut direstart, nginx masih coba connect ke IP lama yang sudah tidak ada → **502 Bad Gateway**, walau container `app` sendiri sehat dan `ready to handle connections` di log-nya. Ini gejala paling umum kalau abis deploy tiba-tiba 502: cek `docker compose ps` — kalau `nginx` uptime-nya jauh lebih lama dari `app`, itu tandanya.
 
 ## 9. Cek semua container sehat
 
@@ -141,15 +161,20 @@ Buka tab **Audit Trail** atau bagian **Notifikasi** di aplikasi — jam yang tam
 1. Buka dokumen yang approval-nya sudah ada tanda tangan tersimpan.
 2. Buka/download PDF-nya (`/documents/{id}/pdf`).
 3. Pastikan PDF terbuka normal dan tanda tangan ter-embed dengan benar (bukan error 500, bukan PDF kosong).
-4. Kalau staging pakai `FILESYSTEM_DISK=s3`, cek juga file `documents/final/{id}.pdf` benar-benar muncul di bucket R2 staging (lewat dashboard Cloudflare R2 atau `aws s3 ls` kalau ada CLI terkonfigurasi).
+4. Cek overlay teks "Status" dan "Punchlist" (kalau dokumennya ada) muat rapi di dalam kotak placement-nya — tidak tumpah/melebar ke luar kotak. Ini baru diperbaiki di update ini (font sekarang menyesuaikan lebar box, bukan cuma tinggi).
+5. Kalau staging pakai `FILESYSTEM_DISK=s3`, cek juga file `documents/final/{id}.pdf` benar-benar muncul di bucket R2 staging (lewat dashboard Cloudflare R2 atau `aws s3 ls` kalau ada CLI terkonfigurasi).
 
-### e. Alur reject → revisi → dual-PDF di approval
-1. Reject dokumen sebagai approver (L2/L3/L4).
+### e. Alur reject → revisi → dual-PDF, dan tanda tangan level sebelumnya tidak hilang
+1. Reject dokumen sebagai approver (mis. L3).
 2. Sebagai admin/partner, revisi dokumen tsb — pastikan cuma field PDF (dan Excel) yang bisa diubah, field lain terkunci.
 3. Buka lagi sebagai approver yang tadi reject — pastikan tampilan approval menunjukkan 2 PDF berdampingan (PDF lama yang ditolak vs PDF revisi terbaru).
+4. Setelah resubmit, generate ulang PDF-nya (`/documents/{id}/pdf`) — pastikan tanda tangan level **sebelum** L3 (mis. L1, L2 yang sudah approve duluan) **masih muncul**, bukan hilang. Ini bug yang baru diperbaiki di update ini — sebelumnya tanda tangan level yang sudah approve ikut hilang tiap kali ada resubmit setelah reject.
 
-### f. Modal "Get Started" setelah login
-Logout, login lagi dengan user yang belum pernah lihat modal ini (`has_seen_get_started = false`) — pastikan modal muncul, link ke User Guide/FAQ jalan, dan ceklis "jangan tampilkan lagi" berfungsi (dicentang → tidak muncul lagi di login berikutnya).
+### f. Draft submit flow & punchlist verification
+1. Buat/lihat dokumen berstatus `draft` — pastikan yang muncul cuma 2 tombol: **Edit** dan **Submit Approval** (tombol Reassign harus tersembunyi untuk status draft).
+2. Buka Edit, ubah salah satu field metadata saja (jangan ganti PDF), klik **Simpan Draft** — buka lagi Edit-nya, pastikan PIC L2 ke atas yang sudah dipilih sebelumnya **tidak hilang**.
+3. Untuk dokumen yang lagi menunggu verifikasi punchlist (status `15`): login sebagai approver yang perlu verifikasi, cek dokumennya **muncul** di halaman `/approvals` dan di tabel "Perlu Tindakan" pada dashboard approver — sebelum update ini keduanya kosong walau approver-nya sebenarnya punya verifikasi pending.
+4. Buka halaman verifikasi punchlist-nya — pastikan PDF revisi punchlist tampil langsung (embed) di preview utama dengan label "PDF Revisi Punchlist", dan PDF utama cuma jadi kotak download terpisah berlabel "PDF Utama".
 
 ### g. Queue & scheduler benar-benar jalan
 ```bash
