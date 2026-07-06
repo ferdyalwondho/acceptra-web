@@ -12,6 +12,7 @@ export interface DocumentCardData {
   activeStep?: string;
   submittedAt: string;
   approvers?: { name: string; initials: string }[];
+  needsRouting?: boolean;
 }
 
 interface Props {

@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  ClusterOption,
   OfflineLevel,
   PageProps,
   PartnerOption,
@@ -22,6 +23,7 @@ import type {
 
 interface Props extends PageProps {
   templates: TemplateOption[];
+  clusters: ClusterOption[];
   partners: PartnerOption[];
   defaults: { vendor_contractor: string };
 }
@@ -34,9 +36,11 @@ const errorCls = 'mt-1 text-xs text-danger';
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin Aviat',
   approver_ms_bo: 'Approver MS BO',
+  approver_ms_bo_team: 'Approver MS BO Team',
   approver_ms_rts: 'Approver MS RTS',
   approver_xls_rth_team: 'Approver XLS RTH Team',
   approver_xls_rth: 'Approver XLS RTH',
+  approver_sme: 'Approver SME',
 };
 
 // Synthetic L1 entry — always prepended, not returned by /api/templates/{id}/levels
@@ -101,7 +105,7 @@ function Field({
   );
 }
 
-export default function DocumentSubmitOngoing({ templates, partners, defaults }: Props) {
+export default function DocumentSubmitOngoing({ templates, clusters, partners, defaults }: Props) {
   const [templateLevels, setTemplateLevels] = useState<TemplateLevelOption[]>([]);
   const [approvers, setApprovers]           = useState<Record<string, Array<{ id: string; name: string }>>>({});
   const [loadingLevels, setLoadingLevels]   = useState(false);
@@ -357,12 +361,16 @@ export default function DocumentSubmitOngoing({ templates, partners, defaults }:
             {/* Cluster Zone */}
             <div className="sm:col-span-2">
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
-                <input
-                  type="text"
+                <select
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value.toUpperCase())}
+                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
                   className={inputCls}
-                />
+                >
+                  <option value="">-- Pilih cluster --</option>
+                  {clusters.map((c) => (
+                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
+                  ))}
+                </select>
               </Field>
             </div>
           </div>

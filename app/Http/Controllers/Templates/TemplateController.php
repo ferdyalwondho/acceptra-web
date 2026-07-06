@@ -19,14 +19,16 @@ class TemplateController extends Controller
     private const VIEW_ROLES  = ['admin', 'super_admin', 'viewer'];
 
     // Roles yang always requires_signature=false (approve-only)
-    private const APPROVE_ONLY_ROLES = ['admin', 'approver_ms_bo'];
+    private const APPROVE_ONLY_ROLES = ['admin', 'approver_ms_bo_team'];
 
     // Roles yang bisa dipilih untuk level L2+ (bukan admin/viewer/partner)
     private const AVAILABLE_ROLES = [
-        ['code' => 'approver_ms_bo',        'label' => 'Approver MS BO (approve-only)'],
+        ['code' => 'approver_ms_bo',        'label' => 'Approver MS BO'],
+        ['code' => 'approver_ms_bo_team',   'label' => 'Approver MS BO Team (approve-only)'],
         ['code' => 'approver_ms_rts',       'label' => 'Approver MS RTS'],
         ['code' => 'approver_xls_rth_team', 'label' => 'Approver XLS RTH Team'],
         ['code' => 'approver_xls_rth',      'label' => 'Approver XLS RTH'],
+        ['code' => 'approver_sme',          'label' => 'Approver SME'],
     ];
 
     // FR-TPL-01: Daftar template dengan filter & pagination
@@ -58,7 +60,7 @@ class TemplateController extends Controller
             $query->where('status', $status);
         }
 
-        $templates = $query->paginate(20)->through(fn (Template $t) => [
+        $templates = $query->paginate(10)->through(fn (Template $t) => [
             'id'             => $t->id,
             'name'           => $t->name,
             'sow_code'       => $t->sow_code,
@@ -102,7 +104,7 @@ class TemplateController extends Controller
             'sow_code'                    => ['nullable', 'string', 'max:50'],
             'description'                 => ['nullable', 'string'],
             'levels'                      => ['required', 'array', 'min:1', 'max:3'],
-            'levels.*.role'               => ['required', 'string', 'in:approver_ms_bo,approver_ms_rts,approver_xls_rth_team,approver_xls_rth'],
+            'levels.*.role'               => ['required', 'string', 'in:approver_ms_bo,approver_ms_bo_team,approver_ms_rts,approver_xls_rth_team,approver_xls_rth,approver_sme'],
             'levels.*.requires_signature' => ['required', 'boolean'],
         ], [
             'name.required'          => 'Template name is required.',
@@ -170,7 +172,7 @@ class TemplateController extends Controller
             'description'                 => ['nullable', 'string'],
             'status'                      => ['required', 'in:active,inactive'],
             'levels'                      => ['required', 'array', 'min:1', 'max:3'],
-            'levels.*.role'               => ['required', 'string', 'in:approver_ms_bo,approver_ms_rts,approver_xls_rth_team,approver_xls_rth'],
+            'levels.*.role'               => ['required', 'string', 'in:approver_ms_bo,approver_ms_bo_team,approver_ms_rts,approver_xls_rth_team,approver_xls_rth,approver_sme'],
             'levels.*.requires_signature' => ['required', 'boolean'],
         ], [
             'name.required'          => 'Template name is required.',
@@ -259,9 +261,11 @@ class TemplateController extends Controller
 
         $levelLabels = [
             'approver_ms_bo'        => 'Approver MS BO',
+            'approver_ms_bo_team'   => 'Approver MS BO Team',
             'approver_ms_rts'       => 'Approver MS RTS',
             'approver_xls_rth_team' => 'Approver XLS RTH Team',
             'approver_xls_rth'      => 'Approver XLS RTH',
+            'approver_sme'          => 'Approver SME',
         ];
 
         $data = $template->levels

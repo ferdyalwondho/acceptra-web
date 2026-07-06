@@ -9,9 +9,11 @@ import type { TemplateRecord, PaginatedResponse, PageProps } from '@/types';
 const ROLE_LABELS: Record<string, string> = {
   admin:                 'Admin Aviat',
   approver_ms_bo:        'MS BO',
+  approver_ms_bo_team:   'MS BO Team',
   approver_ms_rts:       'MS RTS',
   approver_xls_rth_team: 'XLS RTH Team',
   approver_xls_rth:      'XLS RTH',
+  approver_sme:          'SME',
 };
 
 function roleLabel(role: string): string {

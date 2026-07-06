@@ -7,7 +7,8 @@ export type NotificationTypeValue =
   | 'punchlist_revised'
   | 'reassigned'
   | 'result_partner'
-  | 'reminder';
+  | 'reminder'
+  | 'routing_needed';
 
 export interface NotificationRecord {
   id: string;
@@ -45,11 +46,18 @@ export interface UserRecord {
   name: string;
   email: string;
   role: string;
-  region: string | null;
   partner_id: string | null;
   status: 'active' | 'inactive';
   invitation_pending: boolean;
   created_at: string;
+  clusters?: string[];
+}
+
+export interface ClusterOption {
+  id: string;
+  name: string;
+  province: string;
+  display_name: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -309,6 +317,7 @@ export interface DocumentRecord {
   cluster_zone: string | null;
   sow_name: string;
   status_code: string;
+  routing_pending: boolean;
   date_atp_submission: string | null;
   original_pdf_path: string | null;
   template_snapshot: TemplateSnapshot;
@@ -334,6 +343,7 @@ export interface DocumentListItem {
   submitted_at: string;
   has_excel: boolean;
   has_final_pdf: boolean;
+  routing_pending: boolean;
   active_step: string | null;
 }
 

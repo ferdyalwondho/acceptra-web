@@ -25,7 +25,7 @@ interface Props {
 const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors';
 const errorCls = 'mt-1 text-xs text-danger';
 
-const APPROVE_ONLY_ROLES = ['approver_ms_bo'];
+const APPROVE_ONLY_ROLES = ['approver_ms_bo_team'];
 
 export default function TemplateCreate({ available_roles }: Props) {
   const { t } = useTranslation();

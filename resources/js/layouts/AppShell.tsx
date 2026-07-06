@@ -10,7 +10,7 @@ import type { PageProps } from '@/types';
 import {
   LayoutDashboard, FileText, GitBranch, Users, Inbox,
   History, Handshake, Settings, ChevronLeft, ChevronRight,
-  Globe, Menu, UserCircle, PenLine, LogOut, HelpCircle,
+  Globe, Menu, UserCircle, PenLine, LogOut, HelpCircle, MapPin,
 } from 'lucide-react';
 
 interface NavItem {
@@ -24,7 +24,7 @@ interface NavItem {
 
 /* ─── Role helpers ─── */
 const AVIAT_ROLES = ['super_admin', 'admin', 'viewer'];
-const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth'];
+const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_bo_team', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme'];
 
 function workspace(role: string): 'aviat' | 'partner' | 'approver' {
   if (AVIAT_ROLES.includes(role)) return 'aviat';
@@ -40,6 +40,7 @@ function aviatNav(role: string, l1Badge: number, t: (k: string) => string): NavI
     { label: t('nav.documents'),     icon: <FileText className="h-4.5 w-4.5" />,        href: '/documents' },
     { label: t('nav.partners'),      icon: <Handshake className="h-4.5 w-4.5" />,       href: '/partners',    roles: ['super_admin', 'admin', 'viewer'] },
     { label: t('nav.templates_sow'), icon: <GitBranch className="h-4.5 w-4.5" />,       href: '/templates',   roles: ['super_admin', 'admin', 'viewer'] },
+    { label: t('nav.approver_region'), icon: <MapPin className="h-4.5 w-4.5" />,        href: '/clusters',    roles: ['super_admin', 'admin'] },
     { label: t('nav.users'),         icon: <Users className="h-4.5 w-4.5" />,           href: '/users',       roles: ['super_admin'] },
     { label: t('nav.settings'),      icon: <Settings    className="h-4.5 w-4.5" />,       href: '/settings/reminders', roles: ['super_admin'] },
   ].filter((item) => !item.roles || item.roles.includes(role));
@@ -206,8 +207,10 @@ export default function AppShell({ children }: PropsWithChildren) {
   /* ─── Role label ─── */
   const roleLabel: Record<string, string> = {
     super_admin: 'Super Admin', admin: 'Admin', viewer: 'Viewer', partner: 'Partner',
-    approver_ms_bo: 'Approver · MS BO', approver_ms_rts: 'Approver · MS RTS',
+    approver_ms_bo: 'Approver · MS BO', approver_ms_bo_team: 'Approver · MS BO Team',
+    approver_ms_rts: 'Approver · MS RTS',
     approver_xls_rth_team: 'Approver · RTH Team', approver_xls_rth: 'Approver · RTH',
+    approver_sme: 'Approver · SME',
   };
 
   return (

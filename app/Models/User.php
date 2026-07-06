@@ -92,4 +92,14 @@ class User extends Authenticatable implements CanResetPasswordContract
     {
         return $this->hasMany(ApprovalStep::class, 'approver_id');
     }
+
+    public function clusterApprovers(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ClusterApprover::class);
+    }
+
+    public function clusters(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(Cluster::class, 'cluster_approvers')->withPivot('role')->withTimestamps();
+    }
 }
