@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import AppShell from '@/layouts/AppShell';
-import { Plus, Edit, Search, Trash2, Mail, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Edit, Search, Trash2, Mail, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { UserRecord, PaginatedResponse, PageProps } from '@/types';
 
@@ -11,16 +11,18 @@ const ROLE_COLOR: Record<string, string> = {
   admin:                  'bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)]',
   viewer:                 'bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)]',
   approver_ms_bo:         'bg-info-surface     text-info',
+  approver_ms_bo_team:    'bg-info-surface     text-info',
   approver_ms_rts:        'bg-info-surface     text-info',
   approver_xls_rth_team:  'bg-warning-surface  text-warning',
   approver_xls_rth:       'bg-warning-surface  text-warning',
+  approver_sme:           'bg-warning-surface  text-warning',
   partner:                'bg-success-surface  text-success',
 };
 
 interface Props {
   users: PaginatedResponse<UserRecord>;
   roles: { value: string; label: string }[];
-  filters: { search: string | null; role: string | null; status: string | null };
+  filters: { search: string | null; role: string | null; status: string | null; sort: string; dir: 'asc' | 'desc' };
 }
 
 export default function UsersIndex({ users, roles, filters }: Props) {
@@ -47,7 +49,7 @@ export default function UsersIndex({ users, roles, filters }: Props) {
   }, [flashMsg]);
 
   function applyFilters(params: Record<string, string>) {
-    router.get('/users', params, { preserveState: true, replace: true });
+    router.get('/users', { sort: filters.sort, dir: filters.dir, ...params }, { preserveState: true, replace: true });
   }
 
   function handleSearchChange(value: string) {
@@ -66,6 +68,18 @@ export default function UsersIndex({ users, roles, filters }: Props) {
   function handleStatusChange(value: string) {
     setStatusFilter(value);
     applyFilters({ search, role: roleFilter, status: value });
+  }
+
+  function handleSortChange(column: string) {
+    const newDir = filters.sort === column && filters.dir === 'desc' ? 'asc' : 'desc';
+    applyFilters({ search, role: roleFilter, status: statusFilter, sort: column, dir: newDir });
+  }
+
+  function sortIcon(column: string) {
+    if (filters.sort !== column) return <ArrowUpDown className="h-3 w-3 text-[var(--color-text-tertiary)]" />;
+    return filters.dir === 'asc'
+      ? <ArrowUp className="h-3 w-3 text-brand-ink" />
+      : <ArrowDown className="h-3 w-3 text-brand-ink" />;
   }
 
   function handleDelete(user: UserRecord) {
@@ -201,10 +215,24 @@ export default function UsersIndex({ users, roles, filters }: Props) {
               <table className="w-full text-sm">
                 <thead className="bg-[var(--color-bg-subtle)] text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
                   <tr>
-                    <th className="px-5 py-3 text-left">{t('users.col_name')}</th>
+                    <th className="px-5 py-3 text-left">
+                      <span className="inline-flex items-center gap-1">
+                        {t('users.col_name')}
+                        <button type="button" onClick={() => handleSortChange('name')} className="rounded p-0.5 hover:bg-[var(--color-bg-subtle)]">
+                          {sortIcon('name')}
+                        </button>
+                      </span>
+                    </th>
                     <th className="px-5 py-3 text-left">{t('users.col_email')}</th>
-                    <th className="px-5 py-3 text-left">{t('users.col_role')}</th>
-                    <th className="px-5 py-3 text-left">{t('users.col_region')}</th>
+                    <th className="px-5 py-3 text-left">
+                      <span className="inline-flex items-center gap-1">
+                        {t('users.col_role')}
+                        <button type="button" onClick={() => handleSortChange('role')} className="rounded p-0.5 hover:bg-[var(--color-bg-subtle)]">
+                          {sortIcon('role')}
+                        </button>
+                      </span>
+                    </th>
+                    <th className="px-5 py-3 text-left">{t('users.col_clusters')}</th>
                     <th className="px-5 py-3 text-left">{t('users.col_status')}</th>
                     <th className="px-5 py-3 text-left"></th>
                   </tr>
@@ -226,7 +254,11 @@ export default function UsersIndex({ users, roles, filters }: Props) {
                           {roleLabel(u.role)}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-[var(--color-text-secondary)]">{u.region ?? '—'}</td>
+                      <td className="px-5 py-3 text-[var(--color-text-secondary)]">
+                        {u.clusters && u.clusters.length > 0
+                          ? t('users.clusters_assigned_count', { count: u.clusters.length })
+                          : '—'}
+                      </td>
                       <td className="px-5 py-3">
                         <div className="flex flex-col gap-0.5">
                           <span className={cn('rounded-pill w-fit px-2 py-0.5 text-[11px] font-medium', u.status === 'active' ? 'bg-success-surface text-success' : 'bg-muted text-[var(--color-text-secondary)]')}>
@@ -294,8 +326,10 @@ export default function UsersIndex({ users, roles, filters }: Props) {
                           <Mail className="h-3 w-3" /> {t('users.invite_pending')}
                         </span>
                       )}
-                      {u.region && (
-                        <span className="text-[11px] text-[var(--color-text-secondary)]">{u.region}</span>
+                      {u.clusters && u.clusters.length > 0 && (
+                        <span className="text-[11px] text-[var(--color-text-secondary)]">
+                          {t('users.clusters_assigned_count', { count: u.clusters.length })}
+                        </span>
                       )}
                     </div>
                   </div>

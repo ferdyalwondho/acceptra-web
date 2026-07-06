@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
-import { Plus, Search, Edit, Building2, Trash2, ChevronLeft, ChevronRight, Mail } from 'lucide-react';
+import { Plus, Search, Edit, Building2, Trash2, ChevronLeft, ChevronRight, Mail, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { PartnerRecord, PaginatedResponse, PageProps } from '@/types';
 
 interface Props {
   partners:   PaginatedResponse<PartnerRecord>;
-  filters:    { search: string | null; status: string | null };
+  filters:    { search: string | null; status: string | null; sort: string; dir: 'asc' | 'desc' };
   can_manage: boolean;
 }
 
@@ -35,7 +35,7 @@ export default function PartnersIndex({ partners, filters, can_manage }: Props) 
   }, [flashMsg]);
 
   function applyFilters(params: Record<string, string>) {
-    router.get('/partners', params, { preserveState: true, replace: true });
+    router.get('/partners', { sort: filters.sort, dir: filters.dir, ...params }, { preserveState: true, replace: true });
   }
 
   function handleSearchChange(value: string) {
@@ -49,6 +49,18 @@ export default function PartnersIndex({ partners, filters, can_manage }: Props) 
   function handleStatusChange(value: string) {
     setStatusFilter(value);
     applyFilters({ search, status: value });
+  }
+
+  function handleSortChange(column: string) {
+    const newDir = filters.sort === column && filters.dir === 'asc' ? 'desc' : 'asc';
+    applyFilters({ search, status: statusFilter, sort: column, dir: newDir });
+  }
+
+  function sortIcon(column: string) {
+    if (filters.sort !== column) return <ArrowUpDown className="h-3 w-3 text-[var(--color-text-tertiary)]" />;
+    return filters.dir === 'asc'
+      ? <ArrowUp className="h-3 w-3 text-brand-ink" />
+      : <ArrowDown className="h-3 w-3 text-brand-ink" />;
   }
 
   function confirmDelete() {
@@ -159,7 +171,18 @@ export default function PartnersIndex({ partners, filters, can_manage }: Props) 
               <table className="w-full text-sm">
                 <thead className="bg-[var(--color-bg-subtle)] text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
                   <tr>
-                    <th className="px-5 py-3 text-left">{t('partners.col_company')}</th>
+                    <th className="px-5 py-3 text-left">
+                      <span className="inline-flex items-center gap-1">
+                        {t('partners.col_company')}
+                        <button
+                          type="button"
+                          onClick={() => handleSortChange('name')}
+                          className="rounded p-0.5 hover:bg-[var(--color-bg-subtle)]"
+                        >
+                          {sortIcon('name')}
+                        </button>
+                      </span>
+                    </th>
                     <th className="px-5 py-3 text-left">{t('partners.col_contact_email')}</th>
                     <th className="px-5 py-3 text-left">{t('partners.col_pic_count')}</th>
                     <th className="px-5 py-3 text-left">{t('partners.col_documents')}</th>

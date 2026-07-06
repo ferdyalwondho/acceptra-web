@@ -1,9 +1,12 @@
+import { useEffect, useState } from 'react';
 import { useForm, Head, Link } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
+import axios from 'axios';
 import AppShell from '@/layouts/AppShell';
+import ClusterMultiSelect from '@/components/acceptra/ClusterMultiSelect';
 import { ArrowLeft, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { RoleOption, PartnerOption } from '@/types';
+import type { RoleOption, PartnerOption, ClusterOption } from '@/types';
 
 interface Props {
   roles: RoleOption[];
@@ -14,23 +17,46 @@ const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong
 
 const errorCls = 'mt-1 text-xs text-danger';
 
+const APPROVER_ROLES = [
+  'approver_ms_bo', 'approver_ms_bo_team', 'approver_ms_rts',
+  'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme',
+];
+
 export default function UserCreate({ roles, partners }: Props) {
   const { t } = useTranslation();
 
   const form = useForm({
-    name:       '',
-    email:      '',
-    role:       '',
-    region:     '',
-    partner_id: '',
+    name:        '',
+    email:       '',
+    role:        '',
+    partner_id:  '',
+    cluster_ids: [] as string[],
   });
+
+  const [availableClusters, setAvailableClusters] = useState<ClusterOption[]>([]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     form.post('/users');
   }
 
-  const isPartnerRole = form.data.role === 'partner';
+  const isPartnerRole  = form.data.role === 'partner';
+  const isApproverRole = APPROVER_ROLES.includes(form.data.role);
+
+  useEffect(() => {
+    if (!isApproverRole) {
+      setAvailableClusters([]);
+      form.setData('cluster_ids', []);
+      return;
+    }
+
+    axios
+      .get<{ data: ClusterOption[] }>(`/api/clusters/available?role=${form.data.role}`)
+      .then(({ data }) => setAvailableClusters(data.data))
+      .catch(() => setAvailableClusters([]));
+    form.setData('cluster_ids', []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.role]);
 
   return (
     <AppShell>
@@ -125,20 +151,24 @@ export default function UserCreate({ roles, partners }: Props) {
             </div>
           )}
 
-          {/* Region */}
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
-              {t('users.field_region')} <span className="text-xs font-normal text-[var(--color-text-tertiary)]">{t('users.optional')}</span>
-            </label>
-            <input
-              type="text"
-              placeholder="cth. Jawa Barat"
-              value={form.data.region}
-              onChange={(e) => form.setData('region', e.target.value)}
-              className={cn(inputCls, form.errors.region && 'border-danger focus:border-danger')}
-            />
-            {form.errors.region && <p className={errorCls}>{form.errors.region}</p>}
-          </div>
+          {/* Cluster assignment (conditional — approver roles only) */}
+          {isApproverRole && (
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                {t('users.field_clusters')}
+              </label>
+              <p className="mb-2 text-xs text-[var(--color-text-secondary)]">{t('users.select_clusters_hint')}</p>
+              {availableClusters.length === 0 ? (
+                <p className="text-xs text-[var(--color-text-tertiary)]">{t('users.no_open_clusters')}</p>
+              ) : (
+                <ClusterMultiSelect
+                  options={availableClusters}
+                  selected={form.data.cluster_ids}
+                  onChange={(ids) => form.setData('cluster_ids', ids)}
+                />
+              )}
+            </div>
+          )}
         </div>
 
         {/* Invitation notice */}

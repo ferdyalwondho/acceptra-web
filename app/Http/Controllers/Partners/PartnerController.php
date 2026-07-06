@@ -26,8 +26,7 @@ class PartnerController extends Controller
 
         $hasDocuments = Schema::hasTable('documents');
 
-        $query = Partner::withCount(['users as pics_count' => fn ($q) => $q->whereNull('deleted_at')])
-            ->orderBy('name');
+        $query = Partner::withCount(['users as pics_count' => fn ($q) => $q->whereNull('deleted_at')]);
 
         if ($hasDocuments) {
             // Subquery untuk hitung dokumen tanpa memerlukan Eloquent relationship
@@ -50,7 +49,12 @@ class PartnerController extends Controller
             $query->where('status', $status);
         }
 
-        $partners = $query->paginate(20)->through(fn (Partner $p) => [
+        // Sorting — only 'name' (Perusahaan) is sortable for now
+        $sort = 'name';
+        $dir  = $request->input('dir') === 'desc' ? 'desc' : 'asc';
+        $query->orderBy($sort, $dir);
+
+        $partners = $query->paginate(10)->through(fn (Partner $p) => [
             'id'              => $p->id,
             'name'            => $p->name,
             'email'           => $p->email,
@@ -64,6 +68,8 @@ class PartnerController extends Controller
             'filters'    => [
                 'search' => $request->input('search'),
                 'status' => $request->input('status'),
+                'sort'   => $sort,
+                'dir'    => $dir,
             ],
             'can_manage' => in_array($request->user()->role, self::ADMIN_ROLES),
         ]);

@@ -3,8 +3,8 @@ import { Head, Link, useForm } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
-import type { PageProps, PartnerOption, TemplateOption, TemplateLevelOption } from '@/types';
+import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
+import type { PageProps, PartnerOption, TemplateOption, TemplateLevelOption, ClusterOption } from '@/types';
 
 interface DraftDoc {
   id: string;
@@ -23,9 +23,17 @@ interface DraftDoc {
   pics: Record<string, string>;
 }
 
+interface ResolvedApprover {
+  level_order: number;
+  role: string;
+  role_label: string;
+  approver: { id: string; name: string } | null;
+}
+
 interface Props extends PageProps {
   document: DraftDoc;
   templates: TemplateOption[];
+  clusters: ClusterOption[];
   partners?: PartnerOption[];
   is_admin_submit: boolean;
   is_punchlist_revision?: boolean;
@@ -87,6 +95,7 @@ function Field({
 export default function DocumentEdit({
   document: doc,
   templates,
+  clusters,
   partners,
   is_admin_submit,
   is_punchlist_revision = false,
@@ -95,8 +104,9 @@ export default function DocumentEdit({
   last_revision_filename,
 }: Props) {
   const [levels, setLevels]       = useState<TemplateLevelOption[]>([]);
-  const [approvers, setApprovers] = useState<Record<string, Array<{ id: string; name: string }>>>({});
   const [loadingLevels, setLoadingLevels] = useState(false);
+  const [resolvedApprovers, setResolvedApprovers] = useState<ResolvedApprover[]>([]);
+  const [resolving, setResolving] = useState(false);
 
   const form = useForm<{
     unique_id: string;
@@ -108,7 +118,6 @@ export default function DocumentEdit({
     cluster_zone: string;
     template_id: string;
     partner_id: string;
-    pics: Record<string, string>;
     pdf_file: File | null;
     excel_file: File | null;
     _draft: boolean;
@@ -122,7 +131,6 @@ export default function DocumentEdit({
     cluster_zone:      doc.cluster_zone,
     template_id:       doc.template_id,
     partner_id:        doc.partner_id,
-    pics:              doc.pics ?? {},
     pdf_file:          null,
     excel_file:        null,
     _draft:            false,
@@ -132,40 +140,38 @@ export default function DocumentEdit({
   useEffect(() => {
     if (!form.data.template_id) {
       setLevels([]);
-      setApprovers({});
       return;
     }
 
     setLoadingLevels(true);
     axios
       .get<{ data: TemplateLevelOption[] }>(`/api/templates/${form.data.template_id}/levels`)
-      .then(({ data }) => {
-        setLevels(data.data);
-        // Only reset pics if template actually changed from the draft's template
-        if (form.data.template_id !== doc.template_id) {
-          form.setData('pics', {});
-        }
-        const roleSet = new Set(data.data.map((l) => l.role));
-        roleSet.forEach((role) => {
-          axios
-            .get<{ data: Array<{ id: string; name: string; role: string }> }>(`/api/users?role=${role}`)
-            .then(({ data: ud }) => {
-              setApprovers((prev) => ({ ...prev, [role]: ud.data }));
-            })
-            .catch(() => {});
-        });
-      })
+      .then(({ data }) => setLevels(data.data))
       .catch(() => setLevels([]))
       .finally(() => setLoadingLevels(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id]);
+
+  // Once both a template and a cluster are set, resolve L2-L4 approvers from the cluster
+  // mapping (read-only preview — admin no longer picks PICs manually).
+  useEffect(() => {
+    if (!is_admin_submit || !form.data.template_id || !form.data.cluster_zone || is_rejected_revision) {
+      setResolvedApprovers([]);
+      return;
+    }
+
+    setResolving(true);
+    axios
+      .get<{ data: ResolvedApprover[] }>('/api/clusters/resolve', {
+        params: { cluster: form.data.cluster_zone, template_id: form.data.template_id },
+      })
+      .then(({ data }) => setResolvedApprovers(data.data))
+      .catch(() => setResolvedApprovers([]))
+      .finally(() => setResolving(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.template_id, form.data.cluster_zone, is_admin_submit, is_rejected_revision]);
 
   function handleTemplateChange(e: React.ChangeEvent<HTMLSelectElement>) {
     form.setData('template_id', e.target.value);
-  }
-
-  function handlePicChange(levelOrder: number, userId: string) {
-    form.setData('pics', { ...form.data.pics, [String(levelOrder)]: userId });
   }
 
   function submit(draft: boolean) {
@@ -173,7 +179,7 @@ export default function DocumentEdit({
     form.post(`/documents/${doc.id}/revise`, { forceFormData: true });
   }
 
-  const allPicsFilled  = levels.length > 0 && levels.every((l) => form.data.pics[String(l.level_order)]);
+  const allPicsFilled  = resolvedApprovers.length > 0 && resolvedApprovers.every((r) => r.approver);
   const pdfReady       = doc.has_pdf || !!form.data.pdf_file;
   const isDraftEditing = !is_rejected_revision && !is_punchlist_revision;
 
@@ -408,13 +414,17 @@ export default function DocumentEdit({
 
             <div className="sm:col-span-2">
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
-                <input
-                  type="text"
+                <select
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value.toUpperCase())}
+                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
                   className={is_rejected_revision ? lockedInputCls : inputCls}
                   disabled={is_rejected_revision}
-                />
+                >
+                  <option value="">-- Pilih cluster --</option>
+                  {clusters.map((c) => (
+                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
+                  ))}
+                </select>
               </Field>
             </div>
           </div>
@@ -466,39 +476,36 @@ export default function DocumentEdit({
           )}
         </Section>
 
-        {/* ─── 3. PIC per Level ─── */}
-        {levels.length > 0 && (
-          <Section step={3} title="Pilih PIC Tiap Level" done={allPicsFilled}>
-            <div className="space-y-4">
-              {levels.map((level) => {
-                const roleApprovers = approvers[level.role] ?? [];
-                const picError = (form.errors as Record<string, string>)[`pics.${level.level_order}`];
-                return (
-                  <div key={level.level_order}>
-                    <div className="flex items-center gap-4">
-                      <span className="w-44 shrink-0 text-sm font-medium text-[var(--color-text-secondary)]">
-                        L{level.level_order} — {level.role_label}
+        {/* ─── 3. Approver Preview (read-only — resolved automatically dari cluster) ─── */}
+        {is_admin_submit && !is_rejected_revision && levels.length > 0 && (
+          <Section step={3} title="Approver Hasil Resolve Otomatis" done={allPicsFilled}>
+            {!form.data.cluster_zone ? (
+              <p className="text-sm text-[var(--color-text-secondary)]">Pilih cluster terlebih dahulu.</p>
+            ) : resolving ? (
+              <p className="text-sm text-[var(--color-text-secondary)]">Mencari approver…</p>
+            ) : (
+              <div className="space-y-2">
+                {resolvedApprovers.map((r) => (
+                  <div key={r.level_order} className="flex items-center gap-3 text-sm">
+                    <span className="w-44 shrink-0 font-medium text-[var(--color-text-secondary)]">
+                      L{r.level_order} — {r.role_label}
+                    </span>
+                    {r.approver ? (
+                      <span className="flex items-center gap-1.5 text-[var(--color-text-primary)]">
+                        <Check className="h-4 w-4 text-brand-ink" /> {r.approver.name}
                       </span>
-                      <select
-                        value={form.data.pics[String(level.level_order)] ?? ''}
-                        onChange={(e) => handlePicChange(level.level_order, e.target.value)}
-                        className={cn(is_rejected_revision ? lockedInputCls : inputCls, 'flex-1')}
-                        disabled={is_rejected_revision}
-                      >
-                        <option value="">-- Pilih PIC --</option>
-                        {roleApprovers.map((u) => (
-                          <option key={u.id} value={u.id}>{u.name}</option>
-                        ))}
-                      </select>
-                      {form.data.pics[String(level.level_order)] && (
-                        <Check className="h-4 w-4 shrink-0 text-brand-ink" />
-                      )}
-                    </div>
-                    {picError && <p className={cn(errorCls, 'mt-1 pl-48')}>{picError}</p>}
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-danger">
+                        <AlertTriangle className="h-4 w-4" /> Belum ada PIC
+                      </span>
+                    )}
                   </div>
-                );
-              })}
-            </div>
+                ))}
+                {!allPicsFilled && resolvedApprovers.length > 0 && (
+                  <p className="mt-2 text-xs text-danger">Lengkapi PIC cluster ini lewat menu Users sebelum submit.</p>
+                )}
+              </div>
+            )}
           </Section>
         )}
 
@@ -610,7 +617,10 @@ export default function DocumentEdit({
           )}
           <button
             type="submit"
-            disabled={form.processing || !pdfReady || (is_rejected_revision && !form.data.pdf_file)}
+            disabled={
+              form.processing || !pdfReady || (is_rejected_revision && !form.data.pdf_file) ||
+              (is_admin_submit && !is_rejected_revision && levels.length > 0 && !allPicsFilled)
+            }
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
           >
             {form.processing ? 'Memproses…' : is_rejected_revision ? 'Submit Revisi PDF' : 'Submit untuk Approval'}

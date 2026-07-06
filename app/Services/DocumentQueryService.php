@@ -11,7 +11,10 @@ class DocumentQueryService
 {
     private const AVIAT_ROLES = ['admin', 'super_admin', 'viewer'];
 
-    private const SORTABLE = ['created_at', 'date_atp_submission', 'status_code', 'unique_id'];
+    private const SORTABLE = [
+        'created_at', 'date_atp_submission', 'status_code', 'unique_id',
+        'project_code', 'sow_name', 'partner_name',
+    ];
 
     /**
      * Build a filtered, scoped, and sorted query for documents.
@@ -70,8 +73,16 @@ class DocumentQueryService
             : 'created_at';
         $dir = $request->input('dir') === 'asc' ? 'asc' : 'desc';
 
-        // NULLS LAST so drafts (null date_atp_submission) sink to bottom
-        $query->orderByRaw("{$sort} {$dir} NULLS LAST");
+        if ($sort === 'partner_name') {
+            // Partner's name lives on a related table, not on documents — join instead
+            // of orderByRaw. Select documents.* to avoid ambiguous/duplicate id columns.
+            $query->leftJoin('partners', 'documents.partner_id', '=', 'partners.id')
+                ->select('documents.*')
+                ->orderBy('partners.name', $dir);
+        } else {
+            // NULLS LAST so drafts (e.g. null date_atp_submission/project_code) sink to bottom
+            $query->orderByRaw("{$sort} {$dir} NULLS LAST");
+        }
 
         return $query;
     }

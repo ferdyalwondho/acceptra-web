@@ -37,7 +37,11 @@ export default function ApprovalsIndex({ approvals = [] }: Props) {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {approvals.map((doc) => (
-            <DocumentCard key={doc.id} doc={doc} href={`/documents/${doc.id}/approval`} />
+            <DocumentCard
+              key={doc.id}
+              doc={doc}
+              href={doc.needsRouting ? `/documents/${doc.id}` : `/documents/${doc.id}/approval`}
+            />
           ))}
         </div>
       )}

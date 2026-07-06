@@ -12,25 +12,29 @@ use App\Models\InAppNotification;
 use App\Models\PunchlistVerification;
 use App\Models\Signature;
 use App\Services\AuditService;
+use App\Services\ClusterApproverResolutionService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class ApprovalController extends Controller
 {
     private const ADMIN_ROLES    = ['admin', 'super_admin'];
-    private const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth'];
+    private const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_bo_team', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme'];
 
     private const ROLE_LABELS = [
         'admin'                  => 'Admin Aviat',
         'approver_ms_bo'         => 'Approver MS BO',
+        'approver_ms_bo_team'    => 'Approver MS BO Team',
         'approver_ms_rts'        => 'Approver MS RTS',
         'approver_xls_rth_team'  => 'Approver XLS RTH Team',
         'approver_xls_rth'       => 'Approver XLS RTH',
+        'approver_sme'           => 'Approver SME',
     ];
 
     // GET /approvals
@@ -45,11 +49,14 @@ class ApprovalController extends Controller
 
         if (in_array($user->role, self::ADMIN_ROLES)) {
             $docs = Document::with(['partner', 'approvalSteps.approver'])
-                ->whereHas('approvalSteps', fn ($q) =>
-                    $q->where('level_order', 1)
-                      ->where('is_active', true)
-                      ->whereNull('approver_id')
-                )
+                ->where(function ($q) {
+                    $q->whereHas('approvalSteps', fn ($sq) =>
+                            $sq->where('level_order', 1)
+                               ->where('is_active', true)
+                               ->whereNull('approver_id')
+                        )
+                        ->orWhere('routing_pending', true);
+                })
                 ->orderByDesc('date_atp_submission')
                 ->get();
         } else {
@@ -130,6 +137,8 @@ class ApprovalController extends Controller
         ])->findOrFail($id);
 
         $this->authorizeApprovalAccess($user, $document);
+
+        abort_if($document->routing_pending, 422, 'This document is awaiting routing completion. Please complete routing from the document page.');
 
         $activeStep      = $document->approvalSteps->firstWhere('is_active', true);
         $excelAttachment = $document->attachments->firstWhere('type', 'excel');
@@ -269,9 +278,10 @@ class ApprovalController extends Controller
 
         $action = $request->input('action');
 
-        $nextStep = null;
+        $nextStep               = null;
+        $routingPendingTriggered = false;
 
-        DB::transaction(function () use ($user, $document, $activeStep, $action, $request, &$nextStep) {
+        DB::transaction(function () use ($user, $document, $activeStep, $action, $request, &$nextStep, &$routingPendingTriggered) {
             // Resolve signature: use existing ID, or save new base64 data
             $signatureId = $request->input('signature_id');
             if (! $signatureId && $request->filled('signature_data')) {
@@ -312,9 +322,44 @@ class ApprovalController extends Controller
                 ->first();
 
             if ($nextStep) {
-                $nextStep->update(['is_active' => true]);
                 $advanceCode = str_pad($activeStep->level_order * 3 + 1, 2, '0', STR_PAD_LEFT);
-                $document->update(['status_code' => $advanceCode]);
+
+                if ($nextStep->approver_id === null) {
+                    // Partner-submitted document reaching the next level for the first time —
+                    // no PIC was assigned at creation. Resolve L2-L4 approvers from the document's
+                    // cluster right now, inside this same transaction, so this action either fully
+                    // succeeds (L1 approved + PICs assigned) or fails atomically — if the mapping
+                    // is incomplete, throwing here rolls back the L1 status change above too, so
+                    // the step stays exactly as it was ('pending'/is_active=true) and re-actionable.
+                    $levels = $document->approvalSteps->where('level_order', '>', 1);
+                    [$resolved, $missing] = ClusterApproverResolutionService::resolveForLevels(
+                        $document->cluster_zone,
+                        $levels->map(fn (ApprovalStep $s) => (object) ['level_order' => $s->level_order, 'role' => $s->role]),
+                    );
+
+                    if (! empty($missing)) {
+                        $missingLabels = collect($missing)
+                            ->map(fn ($role, $lvl) => "L{$lvl} (" . (self::ROLE_LABELS[$role] ?? $role) . ')')
+                            ->implode(', ');
+
+                        throw ValidationException::withMessages([
+                            'cluster_zone' => ["Cluster '{$document->cluster_zone}' belum punya PIC untuk: {$missingLabels}. Lengkapi dulu lewat menu Users, lalu approve L1 lagi."],
+                        ]);
+                    }
+
+                    foreach ($levels as $step) {
+                        $step->update(['approver_id' => $resolved[$step->level_order]]);
+                    }
+
+                    // is_active stays false until the Admin finishes signature placement via
+                    // "complete routing" — routing_pending now purely means "placement pending",
+                    // since PICs are already resolved and assigned above.
+                    $document->update(['status_code' => $advanceCode, 'routing_pending' => true]);
+                    $routingPendingTriggered = true;
+                } else {
+                    $nextStep->update(['is_active' => true]);
+                    $document->update(['status_code' => $advanceCode]);
+                }
             } else {
                 // Last approver — check for any punchlist across all steps
                 $punchlistSteps = $document->approvalSteps()
@@ -373,13 +418,16 @@ class ApprovalController extends Controller
             ->update(['is_read' => true, 'read_at' => now()]);
 
         // Dispatch notifications outside transaction
-        if ($nextStep) {
+        if ($routingPendingTriggered) {
+            NotifyAdminsJob::dispatch($document->fresh(), 'routing_needed');
+        } elseif ($nextStep) {
             NotifyApproverTurnJob::dispatch($document->fresh(), $nextStep);
         } else {
             NotifyAdminsJob::dispatch($document->fresh(), 'flow_completed');
         }
 
         $flash = match (true) {
+            $routingPendingTriggered => 'L1 approved. This document needs approver routing (L2–L4) assigned before it can proceed.',
             $nextStep !== null => 'Approval recorded. Next approver has been notified.',
             $document->fresh()->status_code === '14' => 'ATP Done with Punchlist. Admin can now upload the revised document.',
             default => 'All approvals complete. Document is now ATP Done.',
@@ -477,9 +525,12 @@ class ApprovalController extends Controller
             'sow'         => $doc->sow_name,
             'partner'     => $doc->partner?->name,
             'statusCode'  => $doc->status_code,
+            'needsRouting' => (bool) $doc->routing_pending,
             'activeStep'  => ($step = $doc->approvalSteps->firstWhere('is_active', true))
                 ? 'L' . $step->level_order . ' — ' . (self::ROLE_LABELS[$step->role] ?? $step->role)
-                : ($doc->status_code === '15' ? 'Punchlist Verification' : null),
+                : ($doc->routing_pending
+                    ? 'Awaiting Routing (L2–L4)'
+                    : ($doc->status_code === '15' ? 'Punchlist Verification' : null)),
             'submittedAt' => $doc->date_atp_submission
                 ? $doc->date_atp_submission->format('d M Y')
                 : $doc->created_at->format('d M Y'),

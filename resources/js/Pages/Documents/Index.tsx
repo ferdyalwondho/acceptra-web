@@ -6,7 +6,7 @@ import StatusBadge from '@/components/acceptra/StatusBadge';
 import DocumentCard, { type DocumentCardData } from '@/components/acceptra/DocumentCard';
 import ExportExcelButton from '@/components/acceptra/ExportExcelButton';
 import {
-  Plus, Search, FileX, ChevronLeft, ChevronRight, X,
+  Plus, Search, FileX, ChevronLeft, ChevronRight, X, ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ATP_STATUS } from '@/lib/status';
@@ -118,18 +118,20 @@ export default function DocumentsIndex({ documents, filters, partners, can_expor
     applyFilters(buildParams({ sort: column, dir: newDir }));
   }
 
-  function sortIndicator(column: string) {
-    if (filters.sort !== column) return null;
-    return filters.dir === 'asc' ? ' ↑' : ' ↓';
+  function sortIcon(column: string) {
+    if (filters.sort !== column) return <ArrowUpDown className="h-3 w-3 text-[var(--color-text-tertiary)]" />;
+    return filters.dir === 'asc'
+      ? <ArrowUp className="h-3 w-3 text-brand-ink" />
+      : <ArrowDown className="h-3 w-3 text-brand-ink" />;
   }
 
   const hasActiveFilters = !!(search || statusCode || partnerId || dateFrom || dateTo);
 
   const tableColumns = [
     { label: t('documents.col_unique_id'),   col: 'unique_id' },
-    { label: t('documents.col_project_code'), col: null },
-    { label: t('documents.col_sow'),          col: null },
-    { label: t('documents.col_partner'),      col: null },
+    { label: t('documents.col_project_code'), col: 'project_code' },
+    { label: t('documents.col_sow'),          col: 'sow_name' },
+    { label: t('documents.col_partner'),      col: 'partner_name' },
     { label: t('documents.col_status'),       col: 'status_code' },
     { label: t('documents.col_active_step'),  col: null },
     { label: t('documents.col_submitted'),    col: 'date_atp_submission' },
@@ -294,13 +296,20 @@ export default function DocumentsIndex({ documents, filters, partners, can_expor
                     {tableColumns.map(({ label, col }) => (
                       <th
                         key={label}
-                        onClick={col ? () => handleSortChange(col) : undefined}
-                        className={cn(
-                          'px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]',
-                          col && 'cursor-pointer select-none hover:text-[var(--color-text-primary)]',
-                        )}
+                        className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]"
                       >
-                        {label}{col ? sortIndicator(col) : ''}
+                        {col ? (
+                          <span className="inline-flex items-center gap-1">
+                            {label}
+                            <button
+                              type="button"
+                              onClick={() => handleSortChange(col)}
+                              className="rounded p-0.5 hover:bg-[var(--color-bg-subtle)]"
+                            >
+                              {sortIcon(col)}
+                            </button>
+                          </span>
+                        ) : label}
                       </th>
                     ))}
                   </tr>
