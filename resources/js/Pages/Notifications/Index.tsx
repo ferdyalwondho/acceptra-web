@@ -39,6 +39,7 @@ const TYPE_META: Record<NotificationTypeValue, { icon: React.ReactNode; color: s
   reassigned:        { icon: <Users className="h-4 w-4" />,         color: 'text-ming',    bg: 'bg-info-surface' },
   result_partner:    { icon: <FileText className="h-4 w-4" />,      color: 'text-info',    bg: 'bg-info-surface' },
   reminder:          { icon: <Clock className="h-4 w-4" />,         color: 'text-warning', bg: 'bg-warning-surface' },
+  routing_needed:    { icon: <Users className="h-4 w-4" />,         color: 'text-ming',    bg: 'bg-info-surface' },
 };
 
 export default function NotificationsIndex({ notifications }: Props) {

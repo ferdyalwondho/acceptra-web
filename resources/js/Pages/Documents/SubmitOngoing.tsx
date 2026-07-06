@@ -13,7 +13,8 @@ import {
   X,
 } from 'lucide-react';
 import type {
-  ImportLevel,
+  ClusterOption,
+  OfflineLevel,
   PageProps,
   PartnerOption,
   TemplateOption,
@@ -22,6 +23,7 @@ import type {
 
 interface Props extends PageProps {
   templates: TemplateOption[];
+  clusters: ClusterOption[];
   partners: PartnerOption[];
   defaults: { vendor_contractor: string };
 }
@@ -34,9 +36,11 @@ const errorCls = 'mt-1 text-xs text-danger';
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin Aviat',
   approver_ms_bo: 'Approver MS BO',
+  approver_ms_bo_team: 'Approver MS BO Team',
   approver_ms_rts: 'Approver MS RTS',
   approver_xls_rth_team: 'Approver XLS RTH Team',
   approver_xls_rth: 'Approver XLS RTH',
+  approver_sme: 'Approver SME',
 };
 
 // Synthetic L1 entry — always prepended, not returned by /api/templates/{id}/levels
@@ -101,35 +105,31 @@ function Field({
   );
 }
 
-export default function DocumentImport({ templates, partners, defaults }: Props) {
+export default function DocumentSubmitOngoing({ templates, clusters, partners, defaults }: Props) {
   const [templateLevels, setTemplateLevels] = useState<TemplateLevelOption[]>([]);
   const [approvers, setApprovers]           = useState<Record<string, Array<{ id: string; name: string }>>>({});
   const [loadingLevels, setLoadingLevels]   = useState(false);
 
   const form = useForm<{
+    unique_id: string;
     vendor_contractor: string;
     pt_index: string;
     project_code: string;
     link_id: string;
     link_name: string;
-    tower_id_ne: string;
-    site_name_ne: string;
-    tower_id_fe: string;
-    site_name_fe: string;
+    cluster_zone: string;
     template_id: string;
     partner_id: string;
     pdf_file: File | null;
-    levels: ImportLevel[];
+    levels: OfflineLevel[];
   }>({
+    unique_id: '',
     vendor_contractor: defaults.vendor_contractor,
     pt_index: '',
     project_code: '',
     link_id: '',
     link_name: '',
-    tower_id_ne: '',
-    site_name_ne: '',
-    tower_id_fe: '',
-    site_name_fe: '',
+    cluster_zone: '',
     template_id: '',
     partner_id: '',
     pdf_file: null,
@@ -185,7 +185,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
   }, [form.data.template_id]);
 
   // Update a single field on a level
-  function updateLevel(idx: number, patch: Partial<ImportLevel>) {
+  function updateLevel(idx: number, patch: Partial<OfflineLevel>) {
     const updated = form.data.levels.map((l, i) => (i === idx ? { ...l, ...patch } : l));
     form.setData('levels', updated);
   }
@@ -206,7 +206,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    form.post(route('documents.import.store'), { forceFormData: true });
+    form.post('/documents/submit-ongoing', { forceFormData: true });
   }
 
   // Helper to get a nested level error from form.errors
@@ -215,9 +215,11 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
   }
 
   const metaDone =
+    !!form.data.unique_id &&
     !!form.data.partner_id &&
     !!form.data.pt_index &&
-    !!form.data.vendor_contractor;
+    !!form.data.vendor_contractor &&
+    !!form.data.cluster_zone;
 
   const templateDone = !!form.data.template_id && templateLevels.length > 0;
 
@@ -232,7 +234,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
 
   return (
     <AppShell>
-      <Head title="Import Dokumen Berjalan — Acceptra" />
+      <Head title="Submit Dokumen Berjalan — Acceptra" />
 
       {/* Breadcrumb */}
       <div className="mb-4 flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
@@ -243,11 +245,11 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
           <ArrowLeft className="h-3.5 w-3.5" /> Dokumen
         </Link>
         <span>/</span>
-        <span className="text-[var(--color-text-primary)]">Import</span>
+        <span className="text-[var(--color-text-primary)]">Submit Dokumen Berjalan</span>
       </div>
 
       <PageHeader
-        title="Import Dokumen Berjalan"
+        title="Submit Dokumen Berjalan"
         description="Untuk dokumen yang sudah punya approval sebagian secara offline."
       />
 
@@ -255,7 +257,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
       <div className="mb-5 flex max-w-3xl items-start gap-3 rounded-lg border border-info/20 bg-info-surface p-4">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-info" />
         <p className="text-sm text-info">
-          Import digunakan untuk dokumen yang sudah ditandatangani sebagian secara offline.
+          Fitur ini digunakan untuk mendaftarkan dokumen yang sudah ditandatangani sebagian secara offline.
           Sistem melanjutkan alur digital hanya pada level yang belum ditandatangani.{' '}
           <strong className="font-semibold">Tanda tangan offline tidak akan ditimpa.</strong>
         </p>
@@ -269,6 +271,19 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
         {/* ─── 1. Metadata ─── */}
         <Section step={1} title="Metadata Dokumen" done={metaDone}>
           <div className="grid gap-4 sm:grid-cols-2">
+            {/* Unique ID */}
+            <div className="sm:col-span-2">
+              <Field label="Unique ID" required error={form.errors.unique_id}>
+                <input
+                  type="text"
+                  value={form.data.unique_id}
+                  onChange={(e) => form.setData('unique_id', e.target.value.toUpperCase())}
+                  placeholder="Contoh: ACC-2026-0001"
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+
             {/* Partner */}
             <div className="sm:col-span-2">
               <Field label="Partner / Subkontraktor" required error={form.errors.partner_id}>
@@ -291,7 +306,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
                 <input
                   type="text"
                   value={form.data.vendor_contractor}
-                  onChange={(e) => form.setData('vendor_contractor', e.target.value)}
+                  onChange={(e) => form.setData('vendor_contractor', e.target.value.toUpperCase())}
                   className={inputCls}
                 />
               </Field>
@@ -303,7 +318,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
                 <input
                   type="text"
                   value={form.data.pt_index}
-                  onChange={(e) => form.setData('pt_index', e.target.value)}
+                  onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
                   placeholder="Contoh: PTI-2026-001"
                   className={inputCls}
                 />
@@ -315,7 +330,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
               <input
                 type="text"
                 value={form.data.project_code}
-                onChange={(e) => form.setData('project_code', e.target.value)}
+                onChange={(e) => form.setData('project_code', e.target.value.toUpperCase())}
                 placeholder="MW-BKS-2406"
                 className={inputCls}
               />
@@ -326,7 +341,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
               <input
                 type="text"
                 value={form.data.link_id}
-                onChange={(e) => form.setData('link_id', e.target.value)}
+                onChange={(e) => form.setData('link_id', e.target.value.toUpperCase())}
                 className={inputCls}
               />
             </Field>
@@ -337,51 +352,27 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
                 <input
                   type="text"
                   value={form.data.link_name}
-                  onChange={(e) => form.setData('link_name', e.target.value)}
+                  onChange={(e) => form.setData('link_name', e.target.value.toUpperCase())}
                   className={inputCls}
                 />
               </Field>
             </div>
 
-            {/* Tower NE */}
-            <Field label="Tower ID Near End" error={form.errors.tower_id_ne}>
-              <input
-                type="text"
-                value={form.data.tower_id_ne}
-                onChange={(e) => form.setData('tower_id_ne', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-
-            {/* Site NE */}
-            <Field label="Site Name Near End" error={form.errors.site_name_ne}>
-              <input
-                type="text"
-                value={form.data.site_name_ne}
-                onChange={(e) => form.setData('site_name_ne', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-
-            {/* Tower FE */}
-            <Field label="Tower ID Far End" error={form.errors.tower_id_fe}>
-              <input
-                type="text"
-                value={form.data.tower_id_fe}
-                onChange={(e) => form.setData('tower_id_fe', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-
-            {/* Site FE */}
-            <Field label="Site Name Far End" error={form.errors.site_name_fe}>
-              <input
-                type="text"
-                value={form.data.site_name_fe}
-                onChange={(e) => form.setData('site_name_fe', e.target.value)}
-                className={inputCls}
-              />
-            </Field>
+            {/* Cluster Zone */}
+            <div className="sm:col-span-2">
+              <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
+                <select
+                  value={form.data.cluster_zone}
+                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
+                  className={inputCls}
+                >
+                  <option value="">-- Pilih cluster --</option>
+                  {clusters.map((c) => (
+                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
           </div>
         </Section>
 
@@ -501,7 +492,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
                           <input
                             type="text"
                             value={level.approver_name}
-                            onChange={(e) => updateLevel(idx, { approver_name: e.target.value })}
+                            onChange={(e) => updateLevel(idx, { approver_name: e.target.value.toUpperCase() })}
                             placeholder="Nama lengkap"
                             className={cn(inputCls, 'text-xs')}
                           />
@@ -643,7 +634,7 @@ export default function DocumentImport({ templates, partners, defaults }: Props)
             disabled={form.processing}
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {form.processing ? 'Mengimpor…' : 'Import Dokumen'}
+            {form.processing ? 'Menyimpan…' : 'Submit Dokumen'}
           </button>
         </div>
       </form>

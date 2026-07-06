@@ -7,6 +7,7 @@ use App\Http\Controllers\Auth\ResetPasswordController;
 use App\Http\Controllers\Approvals\ApprovalController;
 use App\Http\Controllers\Approvals\PunchlistController;
 use App\Http\Controllers\Attachments\AttachmentController;
+use App\Http\Controllers\Clusters\ClusterController;
 use App\Http\Controllers\Documents\DocumentController;
 use App\Http\Controllers\Documents\DocumentExportController;
 use App\Http\Controllers\Partners\PartnerController;
@@ -73,8 +74,8 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents',        [DocumentController::class, 'index'])->name('documents.index');
     Route::get('/documents/create', [DocumentController::class, 'create'])->name('documents.create');
     Route::post('/documents',       [DocumentController::class, 'store'])->name('documents.store');
-    Route::get('/documents/import',  [DocumentController::class, 'importCreate'])->name('documents.import');
-    Route::post('/documents/import', [DocumentController::class, 'importStore'])->name('documents.import.store');
+    Route::get('/documents/submit-ongoing',  [DocumentController::class, 'submitOngoingCreate'])->name('documents.submit-ongoing');
+    Route::post('/documents/submit-ongoing', [DocumentController::class, 'submitOngoingStore'])->name('documents.submit-ongoing.store');
     Route::get('/documents/export', DocumentExportController::class)->name('documents.export');
 
     Route::get('/documents/{id}',           [DocumentController::class, 'show'])->name('documents.show');
@@ -110,11 +111,12 @@ Route::middleware('auth')->group(function () {
             ['Content-Type' => 'application/pdf']
         );
     })->name('documents.pdf.previous');
-    Route::post('/documents/{id}/reassign',            fn () => redirect()->back())->name('documents.reassign');
+    Route::post('/documents/{id}/reassign',            [DocumentController::class, 'reassign'])->name('documents.reassign');
     Route::post('/documents/{id}/revise',              [DocumentController::class, 'revise'])->name('documents.revise');
     Route::post('/documents/{id}/submit',               [DocumentController::class, 'submit'])->name('documents.submit');
     Route::post('/documents/{id}/punchlist-revision',  [DocumentController::class, 'uploadPunchlistRevision'])->name('documents.punchlist-revision');
     Route::post('/documents/{id}/placement',[DocumentController::class, 'placement'])->name('documents.placement');
+    Route::post('/documents/{id}/complete-routing', [DocumentController::class, 'completeRouting'])->name('documents.complete-routing');
 
     // FR-ATT: Lampiran Excel — download & delete
     Route::get('/documents/{id}/attachments/{att_id}/download',
@@ -153,6 +155,13 @@ Route::middleware('auth')->group(function () {
     Route::put('/templates/{id}',           [TemplateController::class, 'update'])->name('templates.update');
     Route::delete('/templates/{id}',        [TemplateController::class, 'destroy'])->name('templates.destroy');
     Route::post('/templates/{id}/clone',    [TemplateController::class, 'clone'])->name('templates.clone');
+
+    Route::get('/clusters',  [ClusterController::class, 'index'])->name('clusters.index');
+    Route::post('/clusters', [ClusterController::class, 'store'])->name('clusters.store');
+    Route::get('/clusters/template',  [ClusterController::class, 'downloadTemplate'])->name('clusters.template');
+    Route::post('/clusters/import',   [ClusterController::class, 'import'])->name('clusters.import');
+    Route::get('/api/clusters/resolve',   [ClusterController::class, 'resolvePreview'])->name('api.clusters.resolve');
+    Route::get('/api/clusters/available', [ClusterController::class, 'availableForRole'])->name('api.clusters.available');
 
     /* ── Users (FR-USR) ── */
     Route::get('/users',            [UserController::class, 'index'])->name('users.index');

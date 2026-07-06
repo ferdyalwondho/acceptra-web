@@ -7,7 +7,7 @@ import StatusBadge from '@/components/acceptra/StatusBadge';
 import ApprovalTimeline, { type ApprovalStep as TimelineStep } from '@/components/acceptra/ApprovalTimeline';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import type { DocumentRecord, ExcelAttachment, PlacementPosition, TemplateLevelRecord, PageProps, AuditLogEntry } from '@/types';
+import type { DocumentRecord, ExcelAttachment, PlacementPosition, TemplateLevelOption, TemplateLevelRecord, PageProps, AuditLogEntry } from '@/types';
 import {
   ArrowLeft, Download, Users, RotateCcw, FileText, FileSpreadsheet,
   AlertTriangle, CheckCircle2, X, Trash2,
@@ -27,9 +27,11 @@ interface Props {
 const ROLE_LABELS: Record<string, string> = {
   admin:                  'Admin Aviat',
   approver_ms_bo:         'Approver MS BO',
+  approver_ms_bo_team:    'Approver MS BO Team',
   approver_ms_rts:        'Approver MS RTS',
   approver_xls_rth_team:  'Approver XLS RTH Team',
   approver_xls_rth:       'Approver XLS RTH',
+  approver_sme:           'Approver SME',
 };
 
 function stepState(s: DocumentRecord['approval_steps'][number]): TimelineStep['state'] {
@@ -108,9 +110,15 @@ interface PlacementPanelProps {
   levels: TemplateLevelRecord[];
   documentId: string;
   onSaved: () => void;
+  // 'standalone' (default) posts to /documents/{id}/placement on its own Save button —
+  // used for Admin's own direct-submission flow. 'controlled' hides the Save button and
+  // reports every position change via onPositionsChange instead, so a parent form (the
+  // Partner-routing RoutingPanel) can bundle positions together with PICs/Excel into one submit.
+  mode?: 'standalone' | 'controlled';
+  onPositionsChange?: (positions: Record<string, Pos>) => void;
 }
 
-function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelProps) {
+function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalone', onPositionsChange }: PlacementPanelProps) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef   = useRef<HTMLDivElement>(null);
@@ -125,6 +133,13 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
 
   const [positions, setPositions] = useState<Record<string, Pos>>({});
   const defaultsSeeded = useRef(false);
+
+  useEffect(() => {
+    if (mode === 'controlled' && onPositionsChange) {
+      onPositionsChange(positions);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -314,6 +329,7 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
           })}
         </div>
 
+        {mode === 'standalone' && (
         <div className="mt-4 flex items-center justify-end gap-3">
           {saved && (
             <span className="flex items-center gap-1.5 text-sm text-success">
@@ -328,6 +344,143 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
             {saving ? t('documents.show.placement_saving_btn') : t('documents.show.placement_save_btn')}
           </button>
         </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Routing Panel (Partner-submitted documents, post-L1-approve) ──────── */
+
+function RoutingPanel({
+  documentId, templateId, clusterZone, pdfUrl, snapLevels,
+}: {
+  documentId: string;
+  templateId: string;
+  clusterZone: string | null;
+  pdfUrl: string;
+  snapLevels: TemplateLevelRecord[];
+}) {
+  const { t } = useTranslation();
+  const [resolvedApprovers, setResolvedApprovers] = useState<Array<{
+    level_order: number; role_label: string; approver: { id: string; name: string } | null;
+  }>>([]);
+  const [positions, setPositions] = useState<Record<string, Pos> | null>(null);
+  const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [errors,    setErrors]    = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!templateId || !clusterZone) return;
+    axios
+      .get<{ data: typeof resolvedApprovers }>('/api/clusters/resolve', {
+        params: { cluster: clusterZone, template_id: templateId },
+      })
+      .then(({ data }) => setResolvedApprovers(data.data))
+      .catch(() => setResolvedApprovers([]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId, clusterZone]);
+
+  const canSubmit = !!positions && Object.keys(positions).length > 0;
+
+  function handleSubmit() {
+    if (submitting || !canSubmit) return;
+    setSubmitting(true);
+    setErrors({});
+    const finalPositions: Record<string, PlacementPosition> = {};
+    Object.entries(positions ?? {}).forEach(([lo, pos]) => {
+      finalPositions[lo] = { page: 1, ...pos };
+    });
+    router.post(`/documents/${documentId}/complete-routing`, {
+      positions: finalPositions,
+      excel_file: excelFile,
+    }, {
+      forceFormData: true,
+      onError: (e) => setErrors(e as Record<string, string>),
+      onFinish: () => setSubmitting(false),
+    });
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-warning/40 bg-[var(--color-bg-surface)] shadow-xs">
+      <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-surface/40 px-5 py-3">
+        <AlertTriangle className="h-4 w-4 text-warning" />
+        <span className="text-sm font-semibold text-warning">{t('documents.show.routing_panel_title')}</span>
+      </div>
+
+      <div className="space-y-5 p-4">
+        {/* PIC per Level — read-only, auto-resolved from the cluster at L1-approval time */}
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+            {t('documents.show.routing_panel_pic_heading')}
+          </p>
+          <p className="mb-3 text-xs text-[var(--color-text-secondary)]">
+            {t('documents.show.routing_panel_pic_auto_notice')}
+          </p>
+          <div className="space-y-2">
+            {resolvedApprovers.map((r) => (
+              <div key={r.level_order} className="flex items-center gap-3 text-sm">
+                <span className="w-44 shrink-0 font-medium text-[var(--color-text-secondary)]">
+                  L{r.level_order} — {r.role_label}
+                </span>
+                <span className="text-[var(--color-text-primary)]">{r.approver?.name ?? '—'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Placement — controlled, embedded in this single form */}
+        <PlacementPanel
+          pdfUrl={pdfUrl}
+          levels={snapLevels}
+          documentId={documentId}
+          onSaved={() => {}}
+          mode="controlled"
+          onPositionsChange={setPositions}
+        />
+
+        {/* Excel — optional add/replace */}
+        <div>
+          <p className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
+            {t('documents.show.routing_panel_excel_label')}
+          </p>
+          {excelFile ? (
+            <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+              <FileSpreadsheet className="h-6 w-6 shrink-0 text-brand-ink" />
+              <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-text-primary)]">{excelFile.name}</span>
+              <button
+                type="button"
+                onClick={() => setExcelFile(null)}
+                className="shrink-0 text-[var(--color-text-secondary)] hover:text-danger"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <label className="flex h-9 cursor-pointer items-center gap-2 rounded-sm border border-dashed border-[var(--color-border-strong)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-brand hover:text-brand-ink">
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              <span>{t('documents.show.routing_panel_excel_upload')}</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                className="sr-only"
+                onChange={(e) => setExcelFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+          )}
+          {errors.excel_file && <p className="mt-1 text-xs text-danger">{errors.excel_file}</p>}
+        </div>
+
+        <div className="flex items-center justify-end gap-3">
+          <button
+            disabled={submitting || !canSubmit}
+            onClick={handleSubmit}
+            title={!canSubmit ? t('documents.show.routing_panel_disabled_hint') : undefined}
+            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? t('documents.show.routing_panel_saving_btn') : t('documents.show.routing_panel_submit_btn')}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -335,8 +488,57 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved }: PlacementPanelP
 
 /* ── Reassign Modal ─────────────────────────────────────────────────────── */
 
-function ReassignModal({ onClose }: { onClose: () => void }) {
+function ReassignModal({
+  documentId, steps, onClose,
+}: {
+  documentId: string;
+  steps: DocumentRecord['approval_steps'];
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
+  const [levelOrder,    setLevelOrder]    = useState('');
+  const [newApproverId, setNewApproverId] = useState('');
+  const [reason,        setReason]        = useState('');
+  const [evidenceFile,  setEvidenceFile]  = useState<File | null>(null);
+  const [approvers,     setApprovers]     = useState<Array<{ id: string; name: string }>>([]);
+  const [loadingApprovers, setLoadingApprovers] = useState(false);
+  const [submitting,    setSubmitting]    = useState(false);
+  const [errors,        setErrors]        = useState<Record<string, string>>({});
+
+  const reassignableSteps = steps.filter((s) => s.level_order > 1 && s.status === 'pending');
+  const selectedStep      = reassignableSteps.find((s) => String(s.level_order) === levelOrder);
+
+  useEffect(() => {
+    setNewApproverId('');
+    setApprovers([]);
+    if (!selectedStep) return;
+
+    setLoadingApprovers(true);
+    axios
+      .get<{ data: Array<{ id: string; name: string }> }>(`/api/users?role=${selectedStep.role}`)
+      .then(({ data }) => setApprovers(data.data))
+      .catch(() => setApprovers([]))
+      .finally(() => setLoadingApprovers(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [levelOrder]);
+
+  function handleSubmit() {
+    if (submitting) return;
+    setSubmitting(true);
+    setErrors({});
+    router.post(`/documents/${documentId}/reassign`, {
+      level_order: levelOrder,
+      new_approver_id: newApproverId,
+      reason,
+      evidence_file: evidenceFile,
+    }, {
+      forceFormData: true,
+      onSuccess: onClose,
+      onError: (e) => setErrors(e as Record<string, string>),
+      onFinish: () => setSubmitting(false),
+    });
+  }
+
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onClose} />
@@ -349,25 +551,84 @@ function ReassignModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">{t('documents.show.reassign_level')}</label>
-            <select className={inputCls}><option>{t('documents.show.reassign_level_placeholder')}</option></select>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+              {t('documents.show.reassign_level')} <span className="text-danger">*</span>
+            </label>
+            <select value={levelOrder} onChange={(e) => setLevelOrder(e.target.value)} className={inputCls}>
+              <option value="">{t('documents.show.reassign_level_placeholder')}</option>
+              {reassignableSteps.map((s) => (
+                <option key={s.level_order} value={s.level_order}>
+                  L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}
+                </option>
+              ))}
+            </select>
+            {errors.level_order && <p className="mt-1 text-xs text-danger">{errors.level_order}</p>}
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
               {t('documents.show.reassign_approver_baru')} <span className="text-danger">*</span>
             </label>
-            <select className={inputCls}><option value="">— pilih approver —</option></select>
+            <select
+              value={newApproverId}
+              onChange={(e) => setNewApproverId(e.target.value)}
+              className={inputCls}
+              disabled={!selectedStep || loadingApprovers}
+            >
+              <option value="">{t('documents.show.reassign_approver_placeholder')}</option>
+              {approvers.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+            {errors.new_approver_id && <p className="mt-1 text-xs text-danger">{errors.new_approver_id}</p>}
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
               {t('documents.show.reassign_alasan')} <span className="text-danger">*</span>
             </label>
-            <textarea rows={3} className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40" />
+            <textarea
+              rows={3}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+            />
+            {errors.reason && <p className="mt-1 text-xs text-danger">{errors.reason}</p>}
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+              {t('documents.show.reassign_bukti')}
+            </label>
+            {evidenceFile ? (
+              <div className="flex h-9 items-center gap-2 rounded-sm border border-[var(--color-border-strong)] bg-white px-3">
+                <Paperclip className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">{evidenceFile.name}</span>
+                <button type="button" onClick={() => setEvidenceFile(null)} className="shrink-0 text-[var(--color-text-secondary)] hover:text-danger">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <label className="flex h-9 cursor-pointer items-center gap-2 rounded-sm border border-dashed border-[var(--color-border-strong)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-brand hover:text-brand-ink">
+                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                <span>{t('documents.show.reassign_bukti_upload')}</span>
+                <input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png"
+                  className="sr-only"
+                  onChange={(e) => setEvidenceFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            )}
+            {errors.evidence_file && <p className="mt-1 text-xs text-danger">{errors.evidence_file}</p>}
           </div>
         </div>
         <div className="mt-6 flex justify-end gap-3">
           <button onClick={onClose} className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]">{t('documents.show.reassign_btn_batal')}</button>
-          <button onClick={onClose} className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white hover:bg-brand-hover">{t('documents.show.reassign_btn_simpan')}</button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !levelOrder || !newApproverId || !reason}
+            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+          >
+            {submitting ? t('documents.show.submitting') : t('documents.show.reassign_btn_simpan')}
+          </button>
         </div>
       </div>
     </div>
@@ -428,7 +689,7 @@ function getAuditEventType(event: string): AuditEventType {
   if (['step.rejected', 'punchlist.revision_rejected'].includes(event)) return 'reject';
   if (['punchlist.revision_uploaded'].includes(event)) return 'revise';
   if (['step.reassigned'].includes(event)) return 'reassign';
-  if (['pdf.stamped', 'pdf.placement_saved', 'signature.saved', 'signature.replaced'].includes(event)) return 'generate';
+  if (['pdf.stamped', 'pdf.placement_saved', 'signature.saved', 'signature.replaced', 'document.routing_completed'].includes(event)) return 'generate';
   return 'draft';
 }
 
@@ -442,7 +703,7 @@ function getAuditEventLabel(log: AuditLogEntry, t: (k: string, opts?: object) =>
   return label;
 }
 
-function AuditTrailTab({ logs }: { logs: AuditLogEntry[] }) {
+function AuditTrailTab({ logs, documentId }: { logs: AuditLogEntry[]; documentId: string }) {
   const { t } = useTranslation();
   const reversed = [...logs].reverse();
 
@@ -500,6 +761,14 @@ function AuditTrailTab({ logs }: { logs: AuditLogEntry[] }) {
                   <p className="mt-2 rounded-md bg-[var(--color-bg-subtle)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
                     {log.description}
                   </p>
+                )}
+                {typeof log.metadata?.attachment_id === 'string' && (
+                  <a
+                    href={`/documents/${documentId}/attachments/${log.metadata.attachment_id}/download`}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-ming hover:underline"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" /> {t('documents.show.audit_attachment_download')}
+                  </a>
                 )}
               </div>
             </li>
@@ -561,15 +830,18 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const isDraft      = statusCode === 'draft';
   const canEdit      = ['02', '05', '08', '11', '14', 'draft'].includes(statusCode);
   const canReassign  = isAdmin && !['draft', '13', '14', '15', '16'].includes(statusCode);
-  const hasPunchlist = ['14', '15', '16'].includes(statusCode);
-  const showPlacement = anchor_failed && !placementSaved && !!pdf_url;
+  // Placement is Admin-only — a Partner viewing their own document must never see or use it.
+  const showPlacement = isAdmin && anchor_failed && !placementSaved && !!pdf_url;
 
   const hasPdf          = !!doc.original_pdf_path;
   const picsComplete    = doc.approval_steps.filter((s) => s.level_order > 1).every((s) => !!s.approver_id);
-  const canSubmitApproval = isDraft && hasPdf && picsComplete;
+  // Admin-submitted drafts must have all PICs assigned before submitting; Partner drafts never
+  // have PICs at draft time (routing happens after L1 approval), so only a PDF is required.
+  const canSubmitApproval = isDraft && hasPdf && (isAdmin ? picsComplete : true);
   const rejectedStep    = doc.approval_steps.find((s) => s.status === 'rejected') ?? null;
+  const punchlistSteps  = doc.approval_steps.filter((s) => s.status === 'approved_with_punchlist' && !!s.punchlist_notes);
 
-  const projectTitle = doc.link_name ?? doc.site_name_ne ?? doc.pt_index;
+  const projectTitle = doc.link_name ?? doc.pt_index;
 
   const timelineSteps: TimelineStep[] = doc.approval_steps.map((s) => ({
     id:                s.id,
@@ -591,10 +863,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     { label: 'Project Code',      value: doc.project_code ?? '—' },
     { label: 'Link ID',           value: doc.link_id ?? '—' },
     { label: 'Link Name',         value: doc.link_name ?? '—' },
-    { label: 'Tower ID (NE)',     value: doc.tower_id_ne ?? '—' },
-    { label: 'Site Name (NE)',    value: doc.site_name_ne ?? '—' },
-    { label: 'Tower ID (FE)',     value: doc.tower_id_fe ?? '—' },
-    { label: 'Site Name (FE)',    value: doc.site_name_fe ?? '—' },
+    { label: 'Cluster Zone',      value: doc.cluster_zone ?? '—' },
     { label: t('documents.show.field_submit_date'),  value: formatDate(doc.date_atp_submission) ?? '—' },
     { label: 'Partner',                               value: doc.partner?.name ?? '—' },
     { label: t('documents.show.field_submitted_by'), value: doc.submitter?.name ?? '—' },
@@ -697,6 +966,18 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
             {/* Left column */}
             <div className="min-w-0 space-y-5">
 
+              {/* Routing (L2-L4 PIC + placement + optional excel) — Partner-submitted
+                  documents only, once L1 has approved and left them unrouted */}
+              {isAdmin && doc.routing_pending && pdf_url && (
+                <RoutingPanel
+                  documentId={doc.id}
+                  templateId={snapshot?.template_id ?? ''}
+                  clusterZone={doc.cluster_zone}
+                  pdfUrl={pdf_url}
+                  snapLevels={snapLevels}
+                />
+              )}
+
               {/* Manual placement UI */}
               {showPlacement && (
                 <PlacementPanel
@@ -746,7 +1027,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                     </p>
                   )}
 
-                  {anchor_failed && !showPlacement && (
+                  {isAdmin && anchor_failed && !showPlacement && (
                     <p className="mt-2 flex items-center gap-1 text-xs text-[var(--color-text-tertiary)]">
                       <MapPin className="h-3.5 w-3.5" /> {t('documents.show.placement_saving')}
                     </p>
@@ -770,15 +1051,28 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                     ))}
                   </div>
 
-                  {hasPunchlist && (
+                  {punchlistSteps.length > 0 && (
                     <div className="mt-5 rounded-lg border border-warning/30 bg-warning-surface p-4">
                       <div className="mb-2 flex items-center gap-2">
                         <AlertTriangle className="h-4 w-4 text-warning" />
                         <span className="text-sm font-semibold text-warning">{t('documents.show.punchlist_heading')}</span>
                       </div>
-                      <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
-                        {doc.atp_punchlist ?? '—'}
-                      </p>
+                      {isPartner ? (
+                        <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
+                          {punchlistSteps.map((s) => s.punchlist_notes).join('\n\n')}
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {punchlistSteps.map((s) => (
+                            <p key={s.id} className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
+                              <span className="font-semibold">
+                                L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}:
+                              </span>{' '}
+                              {s.punchlist_notes}
+                            </p>
+                          ))}
+                        </div>
+                      )}
                       {statusCode === '14' && isAdmin && (
                         <Link
                           href={`/documents/${doc.id}/edit`}
@@ -928,11 +1222,17 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
 
         {/* ── Tab: Audit Trail ── */}
         <TabsContent value="audit-trail">
-          <AuditTrailTab logs={audit_logs} />
+          <AuditTrailTab logs={audit_logs} documentId={doc.id} />
         </TabsContent>
       </Tabs>
 
-      {showReassign && <ReassignModal onClose={() => setShowReassign(false)} />}
+      {showReassign && (
+        <ReassignModal
+          documentId={doc.id}
+          steps={doc.approval_steps}
+          onClose={() => setShowReassign(false)}
+        />
+      )}
       {showSubmitConfirm && (
         <SubmitApprovalModal
           submitting={submittingApproval}

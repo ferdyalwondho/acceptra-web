@@ -14,7 +14,7 @@ class AttachmentController extends Controller
 {
     private const ADMIN_ROLES  = ['admin', 'super_admin'];
     private const AVIAT_ROLES  = ['admin', 'super_admin', 'viewer'];
-    private const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth'];
+    private const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_bo_team', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme'];
 
     // GET /documents/{id}/attachments/{att_id}/download
     public function download(Request $request, string $documentId, string $attachmentId): StreamedResponse

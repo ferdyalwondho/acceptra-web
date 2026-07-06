@@ -5,16 +5,19 @@ namespace App\Http\Controllers\Documents;
 use App\Http\Controllers\Controller;
 use App\Jobs\NotifyAdminsJob;
 use App\Jobs\NotifyApproverTurnJob;
+use App\Jobs\NotifyReassignedJob;
 use App\Models\ApprovalStep;
+use App\Models\Cluster;
 use App\Models\Document;
 use App\Models\DocumentAttachment;
+use App\Models\InAppNotification;
 use App\Models\Partner;
 use App\Models\Template;
 use App\Models\TemplateLevel;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\ClusterApproverResolutionService;
 use App\Services\DocumentQueryService;
-use App\Services\UniqueIdService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -33,9 +36,11 @@ class DocumentController extends Controller
     private const ROLE_LABELS = [
         'admin'                  => 'Admin Aviat',
         'approver_ms_bo'         => 'Approver MS BO',
+        'approver_ms_bo_team'    => 'Approver MS BO Team',
         'approver_ms_rts'        => 'Approver MS RTS',
         'approver_xls_rth_team'  => 'Approver XLS RTH Team',
         'approver_xls_rth'       => 'Approver XLS RTH',
+        'approver_sme'           => 'Approver SME',
     ];
 
     // GET /documents
@@ -48,7 +53,7 @@ class DocumentController extends Controller
         $documents = $query
             ->withExists(['attachments as has_excel' => fn ($q) => $q->where('type', 'excel')])
             ->with(['partner', 'approvalSteps'])
-            ->paginate(20)
+            ->paginate(10)
             ->through(fn (Document $doc) => [
                 'id'            => $doc->id,
                 'unique_id'     => $doc->unique_id,
@@ -61,11 +66,12 @@ class DocumentController extends Controller
                 'submitted_at'  => $doc->date_atp_submission
                     ? $doc->date_atp_submission->format('d M Y')
                     : $doc->created_at->format('d M Y'),
-                'has_excel'     => (bool) $doc->has_excel,
-                'has_final_pdf' => (bool) $doc->final_pdf_path,
-                'active_step'   => ($step = $doc->approvalSteps->firstWhere('is_active', true))
+                'has_excel'       => (bool) $doc->has_excel,
+                'has_final_pdf'   => (bool) $doc->final_pdf_path,
+                'routing_pending' => (bool) $doc->routing_pending,
+                'active_step'     => ($step = $doc->approvalSteps->firstWhere('is_active', true))
                     ? 'L' . $step->level_order . ' — ' . (self::ROLE_LABELS[$step->role] ?? $step->role)
-                    : null,
+                    : ($doc->routing_pending ? 'Awaiting Routing (L2–L4)' : null),
             ]);
 
         return Inertia::render('Documents/Index', [
@@ -106,6 +112,7 @@ class DocumentController extends Controller
 
         $props = [
             'templates' => $templates,
+            'clusters'  => Cluster::where('status', 'active')->orderBy('name')->get(['id', 'name', 'province', 'display_name']),
             'defaults'  => [
                 'vendor_contractor' => 'PT Aviat Solusi Komunikasi Indonesia',
             ],
@@ -180,12 +187,10 @@ class DocumentController extends Controller
                 'project_code'        => $document->project_code,
                 'link_id'             => $document->link_id,
                 'link_name'           => $document->link_name,
-                'tower_id_ne'         => $document->tower_id_ne,
-                'site_name_ne'        => $document->site_name_ne,
-                'tower_id_fe'         => $document->tower_id_fe,
-                'site_name_fe'        => $document->site_name_fe,
+                'cluster_zone'        => $document->cluster_zone,
                 'sow_name'            => $document->sow_name,
                 'status_code'         => $document->status_code,
+                'routing_pending'     => (bool) $document->routing_pending,
                 'date_atp_submission' => $document->date_atp_submission?->toDateString(),
                 'original_pdf_path'   => $document->original_pdf_path,
                 'template_snapshot'   => $document->template_snapshot,
@@ -203,6 +208,7 @@ class DocumentController extends Controller
                     'is_active'           => $s->is_active,
                     'action_at'           => $s->action_at?->toISOString(),
                     'reject_reason'       => $s->reject_reason,
+                    'punchlist_notes'     => $s->punchlist_notes,
                 ]),
                 'atp_punchlist' => $document->atp_punchlist,
             ],
@@ -285,10 +291,7 @@ class DocumentController extends Controller
                 'project_code'      => $document->project_code ?? '',
                 'link_id'           => $document->link_id ?? '',
                 'link_name'         => $document->link_name ?? '',
-                'tower_id_ne'       => $document->tower_id_ne ?? '',
-                'site_name_ne'      => $document->site_name_ne ?? '',
-                'tower_id_fe'       => $document->tower_id_fe ?? '',
-                'site_name_fe'      => $document->site_name_fe ?? '',
+                'cluster_zone'      => $document->cluster_zone ?? '',
                 'template_id'       => $document->template_id ?? '',
                 'has_pdf'           => (bool) $document->original_pdf_path,
                 'partner_id'        => $document->partner_id ?? '',
@@ -301,6 +304,7 @@ class DocumentController extends Controller
                     ->toArray(),
             ],
             'templates'             => $templates,
+            'clusters'              => Cluster::where('status', 'active')->orderBy('name')->get(['id', 'name', 'province', 'display_name']),
             'is_admin_submit'       => $isAdmin,
             'is_punchlist_revision' => false,
             'is_rejected_revision'  => $isRejectedRevision,
@@ -357,6 +361,92 @@ class DocumentController extends Controller
             ->with('success', 'Punchlist revision uploaded. Approvers have been notified.');
     }
 
+    // POST /documents/{id}/reassign
+    public function reassign(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps.approver')->findOrFail($id);
+
+        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
+        abort_if(
+            in_array($document->status_code, ['draft', '13', '14', '15', '16']),
+            422,
+            'Document cannot be reassigned in its current state.'
+        );
+        abort_if($document->routing_pending, 422, 'Complete routing before reassigning approvers.');
+
+        $validated = $request->validate([
+            'level_order'   => ['required', 'integer', 'min:2'],
+            'reason'        => ['required', 'string'],
+            'evidence_file' => ['nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
+        ], [
+            'level_order.required' => 'Please select a level to reassign.',
+            'reason.required'      => 'Reason is required.',
+        ]);
+
+        $step = $document->approvalSteps
+            ->where('level_order', $validated['level_order'])
+            ->where('status', 'pending')
+            ->first();
+
+        abort_if(! $step, 422, 'Approval step not found or not pending.');
+
+        $approverValidated = $request->validate([
+            'new_approver_id' => [
+                'required',
+                'uuid',
+                Rule::exists('users', 'id')->where('role', $step->role)->where('status', 'active'),
+            ],
+        ], [
+            'new_approver_id.required' => 'Please select a new approver.',
+            'new_approver_id.exists'   => 'Please select a valid approver for this level.',
+        ]);
+
+        $newApprover     = User::findOrFail($approverValidated['new_approver_id']);
+        $oldApproverId   = $step->approver_id;
+        $oldApproverName = $step->approver?->name ?? '—';
+
+        DB::transaction(function () use ($request, $user, $document, $step, $newApprover, $validated, $oldApproverId, $oldApproverName) {
+            $attachment = null;
+
+            if ($request->hasFile('evidence_file')) {
+                $file = $request->file('evidence_file');
+                $path = $file->store('documents/reassign-evidence');
+
+                $attachment = DocumentAttachment::create([
+                    'document_id'       => $document->id,
+                    'type'              => 'reassign_evidence',
+                    'file_path'         => $path,
+                    'original_filename' => $file->getClientOriginalName(),
+                    'file_size_bytes'   => $file->getSize(),
+                    'uploaded_by'       => $user->id,
+                ]);
+            }
+
+            $step->update(['approver_id' => $newApprover->id]);
+
+            if ($oldApproverId) {
+                InAppNotification::where('user_id', $oldApproverId)
+                    ->where('document_id', $document->id)
+                    ->where('is_read', false)
+                    ->update(['is_read' => true, 'read_at' => now()]);
+            }
+
+            AuditService::log(
+                $document->id,
+                'step.reassigned',
+                "L{$step->level_order} approver reassigned from {$oldApproverName} to {$newApprover->name} by {$user->name}: {$validated['reason']}",
+                ['level' => $step->level_order, 'attachment_id' => $attachment?->id],
+                $user->id,
+            );
+        });
+
+        NotifyReassignedJob::dispatch($document->fresh(), $step->fresh());
+
+        return redirect()->route('documents.show', $document->id)
+            ->with('success', 'Approver reassigned. New approver has been notified.');
+    }
+
     // POST /documents
     public function store(Request $request): RedirectResponse
     {
@@ -385,15 +475,13 @@ class DocumentController extends Controller
         $l2Step   = null;
 
         DB::transaction(function () use ($validated, $user, $isDraft, $isAdmin, $pdfPath, $excelPath, $request, &$document, &$l2Step) {
-            $uniqueId = (new UniqueIdService)->generate(now()->year);
-
             $template  = Template::with('levels')->findOrFail($validated['template_id']);
             $snapshot  = $this->buildSnapshot($template, ['status' => 'pending', 'positions' => null]);
 
             $partnerId = $isAdmin ? $validated['partner_id'] : $user->partner_id;
 
             $document = Document::create([
-                'unique_id'          => $uniqueId,
+                'unique_id'          => $validated['unique_id'],
                 'pt_index'           => $validated['pt_index'],
                 'link_id'            => $validated['link_id'] ?? null,
                 'link_name'          => $validated['link_name'] ?? null,
@@ -404,10 +492,7 @@ class DocumentController extends Controller
                 'template_id'        => $template->id,
                 'template_snapshot'  => $snapshot,
                 'sow_name'           => $template->name,
-                'tower_id_ne'        => $validated['tower_id_ne'] ?? null,
-                'site_name_ne'       => $validated['site_name_ne'] ?? null,
-                'tower_id_fe'        => $validated['tower_id_fe'] ?? null,
-                'site_name_fe'       => $validated['site_name_fe'] ?? null,
+                'cluster_zone'       => $validated['cluster_zone'],
                 'original_pdf_path'  => $pdfPath,
                 'status_code'        => 'draft',
             ]);
@@ -562,17 +647,14 @@ class DocumentController extends Controller
                 'project_code'      => $document->project_code,
                 'vendor_contractor' => $document->vendor_contractor,
                 'template_id'       => $document->template_id,
-                'tower_id_ne'       => $document->tower_id_ne,
-                'site_name_ne'      => $document->site_name_ne,
-                'tower_id_fe'       => $document->tower_id_fe,
-                'site_name_fe'      => $document->site_name_fe,
+                'cluster_zone'      => $document->cluster_zone,
                 'pics'              => $document->approvalSteps
                     ->where('level_order', '>', 1)
                     ->mapWithKeys(fn (ApprovalStep $s) => [(string) $s->level_order => $s->approver_id])
                     ->toArray(),
             ];
         } else {
-            $validated = $this->validateSubmission($request, $isDraftSave, $isAdmin, requirePdf: false);
+            $validated = $this->validateSubmission($request, $isDraftSave, $isAdmin, requirePdf: false, ignoreDocumentId: $document->id);
 
             if (! $isDraftSave && ! $request->hasFile('pdf_file') && ! $document->original_pdf_path) {
                 return back()->withErrors(['pdf_file' => 'PDF file is required to submit for approval.'])->withInput();
@@ -624,10 +706,7 @@ class DocumentController extends Controller
                     'template_id'       => $template->id,
                     'template_snapshot' => $snapshot,
                     'sow_name'          => $template->name,
-                    'tower_id_ne'       => $validated['tower_id_ne'] ?? null,
-                    'site_name_ne'      => $validated['site_name_ne'] ?? null,
-                    'tower_id_fe'       => $validated['tower_id_fe'] ?? null,
-                    'site_name_fe'      => $validated['site_name_fe'] ?? null,
+                    'cluster_zone'      => $validated['cluster_zone'],
                     'original_pdf_path' => $pdfPath,
                 ]);
 
@@ -687,15 +766,20 @@ class DocumentController extends Controller
             return back()->with('error', 'PDF file is required before submitting.');
         }
 
-        $missingPic = $document->approvalSteps
-            ->where('level_order', '>', 1)
-            ->contains(fn (ApprovalStep $s) => ! $s->approver_id);
+        $isAdmin = in_array($user->role, self::ADMIN_ROLES);
 
-        if ($missingPic) {
-            return back()->with('error', 'All approver levels must be assigned before submitting.');
+        // Routing (L2-L4 PICs) is only required up-front for Admin's own direct submissions —
+        // Partner submissions defer routing to the L1 approver's "complete routing" step.
+        if ($isAdmin) {
+            $missingPic = $document->approvalSteps
+                ->where('level_order', '>', 1)
+                ->contains(fn (ApprovalStep $s) => ! $s->approver_id);
+
+            if ($missingPic) {
+                return back()->with('error', 'All approver levels must be assigned before submitting.');
+            }
         }
 
-        $isAdmin   = in_array($user->role, self::ADMIN_ROLES);
         $validated = [
             'pt_index'          => $document->pt_index,
             'link_id'           => $document->link_id,
@@ -703,10 +787,7 @@ class DocumentController extends Controller
             'project_code'      => $document->project_code,
             'vendor_contractor' => $document->vendor_contractor,
             'template_id'       => $document->template_id,
-            'tower_id_ne'       => $document->tower_id_ne,
-            'site_name_ne'      => $document->site_name_ne,
-            'tower_id_fe'       => $document->tower_id_fe,
-            'site_name_fe'      => $document->site_name_fe,
+            'cluster_zone'      => $document->cluster_zone,
             'pics'              => $document->approvalSteps
                 ->where('level_order', '>', 1)
                 ->mapWithKeys(fn (ApprovalStep $s) => [(string) $s->level_order => $s->approver_id])
@@ -755,10 +836,7 @@ class DocumentController extends Controller
                 'template_id'         => $template->id,
                 'template_snapshot'   => $snapshot,
                 'sow_name'            => $template->name,
-                'tower_id_ne'         => $validated['tower_id_ne'] ?? null,
-                'site_name_ne'        => $validated['site_name_ne'] ?? null,
-                'tower_id_fe'         => $validated['tower_id_fe'] ?? null,
-                'site_name_fe'        => $validated['site_name_fe'] ?? null,
+                'cluster_zone'        => $validated['cluster_zone'],
                 'original_pdf_path'   => $pdfPath,
                 'status_code'         => '01',
                 'date_atp_submission' => now()->toDateString(),
@@ -887,8 +965,8 @@ class DocumentController extends Controller
             ->with('status', $flash);
     }
 
-    // GET /documents/import
-    public function importCreate(Request $request): Response
+    // GET /documents/submit-ongoing
+    public function submitOngoingCreate(Request $request): Response
     {
         abort_if(! in_array($request->user()->role, self::ADMIN_ROLES), 403);
 
@@ -907,8 +985,9 @@ class DocumentController extends Controller
             ->orderBy('name')
             ->get(['id', 'name']);
 
-        return Inertia::render('Documents/Import', [
+        return Inertia::render('Documents/SubmitOngoing', [
             'templates' => $templates,
+            'clusters'  => Cluster::where('status', 'active')->orderBy('name')->get(['id', 'name', 'province', 'display_name']),
             'partners'  => $partners,
             'defaults'  => [
                 'vendor_contractor' => 'PT Aviat Solusi Komunikasi Indonesia',
@@ -916,23 +995,21 @@ class DocumentController extends Controller
         ]);
     }
 
-    // POST /documents/import
-    public function importStore(Request $request): RedirectResponse
+    // POST /documents/submit-ongoing
+    public function submitOngoingStore(Request $request): RedirectResponse
     {
         $user = $request->user();
         abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
 
         // ── 1. Basic validation ──────────────────────────────────────────────
         $validated = $request->validate([
+            'unique_id'               => ['required', 'string', 'max:20', 'unique:documents,unique_id'],
             'vendor_contractor'      => ['required', 'string', 'max:200'],
             'pt_index'               => ['required', 'string', 'max:100'],
             'project_code'           => ['nullable', 'string', 'max:100'],
             'link_id'                => ['nullable', 'string', 'max:100'],
             'link_name'              => ['nullable', 'string', 'max:200'],
-            'tower_id_ne'            => ['nullable', 'string', 'max:100'],
-            'site_name_ne'           => ['nullable', 'string', 'max:200'],
-            'tower_id_fe'            => ['nullable', 'string', 'max:100'],
-            'site_name_fe'           => ['nullable', 'string', 'max:200'],
+            'cluster_zone'           => ['required', 'string', 'max:255', Rule::exists('clusters', 'display_name')->where('status', 'active')],
             'template_id'            => ['required', 'uuid', Rule::exists('templates', 'id')->where('status', 'active')],
             'partner_id'             => ['required', 'uuid', 'exists:partners,id'],
             'pdf_file'               => ['required', 'file', 'mimes:pdf', 'max:20480'],
@@ -944,8 +1021,12 @@ class DocumentController extends Controller
             'levels.*.evidence_file' => ['sometimes', 'nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
             'levels.*.approver_id'   => ['sometimes', 'nullable', 'uuid', 'exists:users,id'],
         ], [
+            'unique_id.required'         => 'Unique ID is required.',
+            'unique_id.unique'           => 'This Unique ID is already in use — please choose another one.',
             'vendor_contractor.required' => 'Vendor/Contractor is required.',
             'pt_index.required'          => 'PT Index is required.',
+            'cluster_zone.required'      => 'Cluster Zone is required.',
+            'cluster_zone.exists'        => 'Please select a valid, active cluster.',
             'template_id.required'       => 'Please select a SOW template.',
             'template_id.exists'         => 'Please select a valid active SOW template.',
             'partner_id.required'        => 'Please select a partner.',
@@ -1020,7 +1101,6 @@ class DocumentController extends Controller
         DB::transaction(function () use (
             $validated, $user, $pdfPath, $evidencePaths, $levels, &$document, &$firstPendingStep
         ) {
-            $uniqueId = (new UniqueIdService)->generate(now()->year);
             $template = Template::with('levels')->findOrFail($validated['template_id']);
             $snapshot = $this->buildSnapshot($template, ['status' => 'pending', 'positions' => null]);
 
@@ -1032,7 +1112,7 @@ class DocumentController extends Controller
                 : '13';
 
             $document = Document::create([
-                'unique_id'           => $uniqueId,
+                'unique_id'           => $validated['unique_id'],
                 'pt_index'            => $validated['pt_index'],
                 'link_id'             => $validated['link_id'] ?? null,
                 'link_name'           => $validated['link_name'] ?? null,
@@ -1043,10 +1123,7 @@ class DocumentController extends Controller
                 'template_id'         => $template->id,
                 'template_snapshot'   => $snapshot,
                 'sow_name'            => $template->name,
-                'tower_id_ne'         => $validated['tower_id_ne'] ?? null,
-                'site_name_ne'        => $validated['site_name_ne'] ?? null,
-                'tower_id_fe'         => $validated['tower_id_fe'] ?? null,
-                'site_name_fe'        => $validated['site_name_fe'] ?? null,
+                'cluster_zone'        => $validated['cluster_zone'],
                 'original_pdf_path'   => $pdfPath,
                 'status_code'         => $statusCode,
                 'date_atp_submission' => now()->toDateString(),
@@ -1142,9 +1219,7 @@ class DocumentController extends Controller
         $user     = $request->user();
         $document = Document::findOrFail($id);
 
-        if (! in_array($user->role, self::ADMIN_ROLES)) {
-            abort_if($document->submitted_by !== $user->id, 403);
-        }
+        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
 
         $validated = $request->validate([
             'positions'               => ['required', 'array'],
@@ -1174,24 +1249,108 @@ class DocumentController extends Controller
         return response()->json(['message' => 'Placement saved.']);
     }
 
+    // POST /documents/{id}/complete-routing — Admin finishes signature placement (+ optional
+    // excel) after L1 approves a Partner-submitted document. L2-L4 approvers are already
+    // auto-assigned from the cluster mapping at L1-approval time (see ApprovalController::approve()),
+    // so this step is purely about placement — no PIC selection happens here.
+    public function completeRouting(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with(['approvalSteps', 'template.levels'])->findOrFail($id);
+
+        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
+        abort_if(! $document->routing_pending, 422, 'This document is not awaiting routing.');
+
+        $rules = [
+            'positions'          => ['required', 'array'],
+            'positions.*.page'   => ['required', 'integer', 'min:1'],
+            'positions.*.x'      => ['required', 'numeric'],
+            'positions.*.y'      => ['required', 'numeric'],
+            'positions.*.width'  => ['required', 'numeric', 'min:1'],
+            'positions.*.height' => ['required', 'numeric', 'min:1'],
+            'excel_file'         => ['nullable', 'file', 'mimes:xlsx,xls', 'max:10240'],
+        ];
+        $messages = [
+            'excel_file.mimes' => 'Excel file must be .xlsx or .xls.',
+            'excel_file.max'   => 'Excel file size must not exceed 10MB.',
+        ];
+
+        $validated = $request->validate($rules, $messages);
+
+        $l2Step = null;
+
+        DB::transaction(function () use ($request, $user, $document, $validated, &$l2Step) {
+            // Activate L2 (approver_id was already assigned when L1 was approved)
+            $l2Step = $document->approvalSteps->firstWhere('level_order', 2);
+            $l2Step?->update(['is_active' => true]);
+
+            // Placement
+            $snapshot = $document->template_snapshot;
+            $snapshot['placement'] = [
+                'status'    => 'manual',
+                'positions' => $validated['positions'],
+            ];
+
+            // Excel replace (same pattern as revise()'s rejected-doc excel replacement)
+            $excelReplaced = false;
+            if ($request->hasFile('excel_file')) {
+                $document->attachments()->where('type', 'excel')->delete();
+                $excelPath = $request->file('excel_file')->store('documents/excel');
+
+                DocumentAttachment::create([
+                    'document_id'       => $document->id,
+                    'type'              => 'excel',
+                    'file_path'         => $excelPath,
+                    'original_filename' => $request->file('excel_file')->getClientOriginalName(),
+                    'file_size_bytes'   => $request->file('excel_file')->getSize(),
+                    'uploaded_by'       => $user->id,
+                ]);
+                $excelReplaced = true;
+            }
+
+            $document->update([
+                'template_snapshot' => $snapshot,
+                'routing_pending'   => false,
+            ]);
+
+            AuditService::log(
+                $document->id,
+                'document.routing_completed',
+                "Placement completed by {$user->name}" . ($excelReplaced ? ', Excel replaced' : ''),
+                [],
+                $user->id,
+            );
+        });
+
+        if ($l2Step) {
+            NotifyApproverTurnJob::dispatch($document->fresh(), $l2Step->fresh());
+        }
+
+        return redirect()->route('documents.show', $document->id)
+            ->with('status', 'Routing completed. L2 approver has been notified.');
+    }
+
     // ──────────────────────────────────────────────
     // Private helpers
     // ──────────────────────────────────────────────
 
-    private function validateSubmission(Request $request, bool $isDraft, bool $isAdmin, ?bool $requirePdf = null): array
+    private function validateSubmission(Request $request, bool $isDraft, bool $isAdmin, ?bool $requirePdf = null, ?string $ignoreDocumentId = null): array
     {
         $requirePdf = $requirePdf ?? ! $isDraft;
 
+        $uniqueIdRule = Rule::unique('documents', 'unique_id');
+        if ($ignoreDocumentId) {
+            $uniqueIdRule = $uniqueIdRule->ignore($ignoreDocumentId);
+        }
+
         $rules = [
+            'unique_id'         => ['required', 'string', 'max:20', $uniqueIdRule],
             'vendor_contractor' => ['required', 'string', 'max:200'],
             'pt_index'          => ['required', 'string', 'max:100'],
             'project_code'      => ['nullable', 'string', 'max:100'],
             'link_id'           => ['nullable', 'string', 'max:100'],
             'link_name'         => ['nullable', 'string', 'max:200'],
-            'tower_id_ne'       => ['nullable', 'string', 'max:100'],
-            'site_name_ne'      => ['nullable', 'string', 'max:200'],
-            'tower_id_fe'       => ['nullable', 'string', 'max:100'],
-            'site_name_fe'      => ['nullable', 'string', 'max:200'],
+            'cluster_zone'      => ['required', 'string', 'max:255', Rule::exists('clusters', 'display_name')->where('status', 'active')],
             'template_id'       => ['required', 'uuid', Rule::exists('templates', 'id')->where('status', 'active')],
             'pdf_file'          => [$requirePdf ? 'required' : 'nullable', 'file', 'mimes:pdf', 'max:20480'],
             'excel_file'        => ['nullable', 'file', 'mimes:xlsx,xls', 'max:10240'],
@@ -1205,7 +1364,11 @@ class DocumentController extends Controller
         }
 
         $messages = [
+            'unique_id.required'         => 'Unique ID is required.',
+            'unique_id.unique'           => 'This Unique ID is already in use — please choose another one.',
             'pt_index.required'          => 'PT Index is required.',
+            'cluster_zone.required'      => 'Cluster Zone is required.',
+            'cluster_zone.exists'        => 'Please select a valid, active cluster.',
             'template_id.required'       => 'Please select a SOW template.',
             'template_id.exists'         => 'Please select a valid active SOW template.',
             'pdf_file.required'          => 'PDF file is required.',
@@ -1218,22 +1381,33 @@ class DocumentController extends Controller
             'partner_id.exists'          => 'Please select a valid partner.',
         ];
 
-        // PIC validation per level — required to submit, but merely format-checked (and preserved) while draft.
+        $validated = $request->validate($rules, $messages);
+
+        // Auto-resolve L2-L4 approvers from the cluster mapping. Only required when Admin is
+        // actually submitting (not saving a draft) — Partner submissions defer routing entirely
+        // to the L1 approver's cluster-resolution step (see ApprovalController::approve()).
         $template = Template::with('levels')
             ->where('status', 'active')
-            ->find($request->input('template_id'));
+            ->find($validated['template_id']);
 
-        if ($template) {
-            foreach ($template->levels->where('level_order', '>', 1) as $level) {
-                $rules["pics.{$level->level_order}"] = $isDraft
-                    ? ['nullable', 'uuid', 'exists:users,id']
-                    : ['required', 'uuid', 'exists:users,id'];
-                $messages["pics.{$level->level_order}.required"] = "Please select an approver for Level {$level->level_order}.";
-                $messages["pics.{$level->level_order}.exists"]   = "Please select a valid approver for Level {$level->level_order}.";
+        if ($isAdmin && ! $isDraft && $template) {
+            $levels = $template->levels->where('level_order', '>', 1)->values();
+            [$resolved, $missing] = ClusterApproverResolutionService::resolveForLevels($validated['cluster_zone'], $levels);
+
+            if (! empty($missing)) {
+                $missingLabels = collect($missing)
+                    ->map(fn ($role, $lvl) => "L{$lvl} (" . (self::ROLE_LABELS[$role] ?? $role) . ')')
+                    ->implode(', ');
+
+                throw ValidationException::withMessages([
+                    'cluster_zone' => ["Cluster '{$validated['cluster_zone']}' belum punya PIC untuk: {$missingLabels}. Lengkapi dulu lewat menu Users."],
+                ]);
             }
+
+            $validated['pics'] = $resolved;
         }
 
-        return $request->validate($rules, $messages);
+        return $validated;
     }
 
     private function buildSnapshot(Template $template, array $placement): array

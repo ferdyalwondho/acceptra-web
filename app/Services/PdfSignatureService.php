@@ -161,10 +161,21 @@ class PdfSignatureService
                         $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
 
                     } elseif ($type === 'name' && $step->approver) {
-                        $fontSize = $this->fitFontSize($pdf, $step->approver->name, $w, $h);
+                        $nameRowH = $h / 2;
+                        $dateRowH = $h - $nameRowH;
+                        $dateText = $step->action_at?->format('d M Y') ?? $step->offline_date?->format('d M Y');
+
                         $pdf->SetTextColor(0, 0, 0);
-                        $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
-                        $pdf->Cell($w, $fontSize, $step->approver->name, 0, 0, 'C');
+
+                        $nameFontSize = $this->fitFontSize($pdf, $step->approver->name, $w, $nameRowH, 'B');
+                        $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
+                        $pdf->Cell($w, $nameFontSize, $step->approver->name, 0, 0, 'L');
+
+                        if ($dateText) {
+                            $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
+                            $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
+                            $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L');
+                        }
                     }
                 }
             }
@@ -235,14 +246,14 @@ class PdfSignatureService
      * The base size only ever depended on box height — a narrow-but-tall box could
      * still overflow sideways without this.
      */
-    private function fitFontSize(Fpdi $pdf, string $text, float $w, float $h): int
+    private function fitFontSize(Fpdi $pdf, string $text, float $w, float $h, string $style = 'B'): int
     {
         $fontSize = max(6, (int) round($h * 0.55));
-        $pdf->SetFont('Helvetica', 'B', $fontSize);
+        $pdf->SetFont('Helvetica', $style, $fontSize);
 
         while ($fontSize > 6 && $pdf->GetStringWidth($text) > $w) {
             $fontSize--;
-            $pdf->SetFont('Helvetica', 'B', $fontSize);
+            $pdf->SetFont('Helvetica', $style, $fontSize);
         }
 
         return $fontSize;

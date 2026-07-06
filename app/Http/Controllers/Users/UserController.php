@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Partner;
 use App\Models\User;
 use App\Notifications\InvitationNotification;
+use App\Services\ClusterApproverResolutionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -23,14 +24,18 @@ class UserController extends Controller
         ['value' => 'viewer',                'label' => 'Viewer'],
         ['value' => 'partner',               'label' => 'Partner / Subcon'],
         ['value' => 'approver_ms_bo',        'label' => 'Approver - MS BO'],
+        ['value' => 'approver_ms_bo_team',   'label' => 'Approver - MS BO Team'],
         ['value' => 'approver_ms_rts',       'label' => 'Approver - MS RTS'],
         ['value' => 'approver_xls_rth_team', 'label' => 'Approver - XLS RTH Team'],
         ['value' => 'approver_xls_rth',      'label' => 'Approver - XLS RTH'],
+        ['value' => 'approver_sme',          'label' => 'Approver - SME'],
     ];
 
-    private const VALID_ROLES = [
+    // Public so the users:import Artisan command can validate against the same list.
+    public const VALID_ROLES = [
         'super_admin', 'admin', 'viewer', 'partner',
-        'approver_ms_bo', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth',
+        'approver_ms_bo', 'approver_ms_bo_team', 'approver_ms_rts',
+        'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme',
     ];
 
     // FR-USR-01: Daftar user dengan filter & pagination
@@ -38,7 +43,7 @@ class UserController extends Controller
     {
         abort_if($request->user()->role !== 'super_admin', 403);
 
-        $query = User::query()->orderBy('created_at', 'desc');
+        $query = User::query();
 
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
@@ -55,16 +60,29 @@ class UserController extends Controller
             $query->where('status', $status);
         }
 
-        $users = $query->paginate(20)->through(fn (User $u) => [
+        // Sorting — whitelist prevents SQL injection; default stays created_at/desc
+        // so users who haven't sorted see the same ordering as before.
+        $sortableColumns = ['name', 'role'];
+        $sort = in_array($request->input('sort'), $sortableColumns) ? $request->input('sort') : 'created_at';
+        $dir  = $request->input('dir') === 'asc' ? 'asc' : 'desc';
+        $query->orderBy($sort, $dir);
+
+        $query->with(['clusterApprovers.cluster']);
+
+        $users = $query->paginate(10)->through(fn (User $u) => [
             'id'                 => $u->id,
             'name'               => $u->name,
             'email'              => $u->email,
             'role'               => $u->role,
-            'region'             => $u->region,
             'partner_id'         => $u->partner_id,
             'status'             => $u->status,
             'invitation_pending' => $u->email_verified_at === null,
             'created_at'         => $u->created_at->toISOString(),
+            'clusters'           => $u->clusterApprovers
+                ->where('role', $u->role)
+                ->pluck('cluster.display_name')
+                ->filter()
+                ->values(),
         ]);
 
         return Inertia::render('Users/Index', [
@@ -73,6 +91,8 @@ class UserController extends Controller
                 'search' => $request->input('search'),
                 'role'   => $request->input('role'),
                 'status' => $request->input('status'),
+                'sort'   => $sort,
+                'dir'    => $dir,
             ],
             'roles' => self::ROLES,
         ]);
@@ -95,11 +115,12 @@ class UserController extends Controller
         abort_if($request->user()->role !== 'super_admin', 403);
 
         $validated = $request->validate([
-            'name'       => ['required', 'string', 'max:150'],
-            'email'      => ['required', 'email', 'unique:users,email'],
-            'role'       => ['required', 'in:' . implode(',', self::VALID_ROLES)],
-            'region'     => ['nullable', 'string', 'max:100'],
-            'partner_id' => ['required_if:role,partner', 'nullable', 'uuid', 'exists:partners,id'],
+            'name'          => ['required', 'string', 'max:150'],
+            'email'         => ['required', 'email', 'unique:users,email'],
+            'role'          => ['required', 'in:' . implode(',', self::VALID_ROLES)],
+            'partner_id'    => ['required_if:role,partner', 'nullable', 'uuid', 'exists:partners,id'],
+            'cluster_ids'   => ['sometimes', 'array'],
+            'cluster_ids.*' => ['uuid', 'exists:clusters,id'],
         ], [
             'name.required'      => 'Nama harus diisi.',
             'name.max'           => 'Nama maksimal 150 karakter.',
@@ -108,7 +129,6 @@ class UserController extends Controller
             'email.unique'       => 'Email sudah terdaftar.',
             'role.required'      => 'Role harus dipilih.',
             'role.in'            => 'Role tidak valid.',
-            'region.max'         => 'Region maksimal 100 karakter.',
             'partner_id.required_if' => 'Partner wajib dipilih untuk user dengan role Partner.',
             'partner_id.exists'  => 'Partner tidak ditemukan.',
         ]);
@@ -120,12 +140,13 @@ class UserController extends Controller
             'email'                 => $validated['email'],
             'password'              => Str::random(32),
             'role'                  => $validated['role'],
-            'region'                => $validated['region'] ?? null,
             'partner_id'            => $validated['partner_id'] ?? null,
             'status'                => 'inactive',
             'invitation_token'      => $token,
             'invitation_expires_at' => now()->addHours(72),
         ]);
+
+        ClusterApproverResolutionService::assignClusters($user, $validated['role'], $validated['cluster_ids'] ?? []);
 
         $user->notify(new InvitationNotification($token));
 
@@ -138,7 +159,7 @@ class UserController extends Controller
     {
         abort_if($request->user()->role !== 'super_admin', 403);
 
-        $user = User::findOrFail($id);
+        $user = User::with('clusterApprovers')->findOrFail($id);
 
         return Inertia::render('Users/Edit', [
             'user'     => [
@@ -146,14 +167,14 @@ class UserController extends Controller
                 'name'               => $user->name,
                 'email'              => $user->email,
                 'role'               => $user->role,
-                'region'             => $user->region,
                 'partner_id'         => $user->partner_id,
                 'status'             => $user->status,
                 'invitation_pending' => $user->email_verified_at === null,
                 'created_at'         => $user->created_at->toISOString(),
             ],
-            'roles'    => self::ROLES,
-            'partners' => Partner::where('status', 'active')->orderBy('name')->get(['id', 'name']),
+            'roles'                => self::ROLES,
+            'partners'             => Partner::where('status', 'active')->orderBy('name')->get(['id', 'name']),
+            'assigned_cluster_ids' => $user->clusterApprovers->where('role', $user->role)->pluck('cluster_id')->values(),
         ]);
     }
 
@@ -165,11 +186,12 @@ class UserController extends Controller
         $user = User::findOrFail($id);
 
         $validated = $request->validate([
-            'name'       => ['required', 'string', 'max:150'],
-            'role'       => ['required', 'in:' . implode(',', self::VALID_ROLES)],
-            'status'     => ['required', 'in:active,inactive'],
-            'region'     => ['nullable', 'string', 'max:100'],
-            'partner_id' => ['required_if:role,partner', 'nullable', 'uuid', 'exists:partners,id'],
+            'name'          => ['required', 'string', 'max:150'],
+            'role'          => ['required', 'in:' . implode(',', self::VALID_ROLES)],
+            'status'        => ['required', 'in:active,inactive'],
+            'partner_id'    => ['required_if:role,partner', 'nullable', 'uuid', 'exists:partners,id'],
+            'cluster_ids'   => ['sometimes', 'array'],
+            'cluster_ids.*' => ['uuid', 'exists:clusters,id'],
         ], [
             'name.required'      => 'Nama harus diisi.',
             'name.max'           => 'Nama maksimal 150 karakter.',
@@ -177,7 +199,6 @@ class UserController extends Controller
             'role.in'            => 'Role tidak valid.',
             'status.required'    => 'Status harus dipilih.',
             'status.in'          => 'Status tidak valid.',
-            'region.max'         => 'Region maksimal 100 karakter.',
             'partner_id.required_if' => 'Partner wajib dipilih untuk user dengan role Partner.',
             'partner_id.exists'  => 'Partner tidak ditemukan.',
         ]);
@@ -186,9 +207,12 @@ class UserController extends Controller
             'name'       => $validated['name'],
             'role'       => $validated['role'],
             'status'     => $validated['status'],
-            'region'     => $validated['region'] ?? null,
             'partner_id' => $validated['partner_id'] ?? null,
         ]);
+
+        // Role bisa berubah — hapus assignment cluster lama (terikat role lama), lalu buat ulang.
+        $user->clusterApprovers()->delete();
+        ClusterApproverResolutionService::assignClusters($user, $validated['role'], $validated['cluster_ids'] ?? []);
 
         return redirect()->route('users.index')
             ->with('status', 'User berhasil diperbarui.');

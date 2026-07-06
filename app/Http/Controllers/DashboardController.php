@@ -32,16 +32,16 @@ class DashboardController extends Controller
         $user = $request->user();
 
         return match (true) {
-            in_array($user->role, ['admin', 'super_admin', 'viewer']) => $this->adminDashboard($user),
-            $user->role === 'partner'                                  => $this->partnerDashboard($user),
+            in_array($user->role, ['admin', 'super_admin', 'viewer']) => $this->adminDashboard($user, $request),
+            $user->role === 'partner'                                  => $this->partnerDashboard($user, $request),
             str_starts_with($user->role, 'approver_')                 => $this->approverDashboard($user),
-            default                                                    => $this->adminDashboard($user),
+            default                                                    => $this->adminDashboard($user, $request),
         };
     }
 
     // ── Admin / Super Admin / Viewer ─────────────────────────────────────────
 
-    private function adminDashboard(User $user): Response
+    private function adminDashboard(User $user, Request $request): Response
     {
         // 1. Grouped metrics
         $metrics = [
@@ -67,7 +67,7 @@ class DashboardController extends Controller
         $overdueApprovals = $overdueDocuments->map(fn (Document $doc) => [
             'id'           => $doc->id,
             'uniqueId'     => $doc->unique_id,
-            'project'      => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+            'project'      => $doc->link_name ?? $doc->pt_index,
             'sow'          => $doc->sow_name,
             'partner'      => $doc->partner?->name,
             'statusCode'   => $doc->status_code,
@@ -83,7 +83,7 @@ class DashboardController extends Controller
             ->map(fn (Document $doc) => [
                 'id'          => $doc->id,
                 'uniqueId'    => $doc->unique_id,
-                'project'     => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+                'project'     => $doc->link_name ?? $doc->pt_index,
                 'sow'         => $doc->sow_name,
                 'partner'     => $doc->partner?->name,
                 'statusCode'  => $doc->status_code,
@@ -114,16 +114,15 @@ class DashboardController extends Controller
             ['stage' => 'L4', 'count' => Document::whereIn('status_code', ['10', '11', '12', '14', '15'])->count()],
         ];
 
-        // 6. Monthly document creation trend — last 6 months
-        $monthlyTrend = collect(range(5, 0))->map(function (int $monthsAgo) {
-            $date = now()->subMonths($monthsAgo);
-            return [
-                'month' => $date->format('M Y'),
-                'count' => Document::whereYear('created_at', $date->year)
-                                   ->whereMonth('created_at', $date->month)
-                                   ->count(),
-            ];
-        })->values()->all();
+        // 6. Weekly document creation trend for the selected month
+        [$trendMonth, $trendYear] = $this->resolveMonthYear($request, Document::min('created_at'));
+
+        $weeklyTrend = $this->weeklyTrend(
+            Carbon::create($trendYear, $trendMonth, 1),
+            fn (Carbon $start, Carbon $end) => Document::whereBetween('created_at', [$start, $end])->count(),
+        );
+
+        $availableYears = $this->availableYears(Document::min('created_at'));
 
         // 7. Top 5 partners by total document count
         $topPartners = \App\Models\Partner::withCount('documents')
@@ -143,14 +142,17 @@ class DashboardController extends Controller
             'overdue_approvals'        => $overdueApprovals,
             'recent_activity'          => $recentActivity,
             'approval_stage_breakdown' => $approvalStageBreakdown,
-            'monthly_trend'            => $monthlyTrend,
+            'weekly_trend'             => $weeklyTrend,
+            'selected_month'           => $trendMonth,
+            'selected_year'            => $trendYear,
+            'available_years'          => $availableYears,
             'top_partners'             => $topPartners,
         ]);
     }
 
     // ── Partner ──────────────────────────────────────────────────────────────
 
-    private function partnerDashboard(User $user): Response
+    private function partnerDashboard(User $user, Request $request): Response
     {
         abort_if(! $user->partner_id, 403);
 
@@ -170,7 +172,7 @@ class DashboardController extends Controller
         $documents = $docs->take(10)->map(fn (Document $doc) => [
             'id'                 => $doc->id,
             'uniqueId'           => $doc->unique_id,
-            'project'            => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+            'project'            => $doc->link_name ?? $doc->pt_index,
             'sow'                => $doc->sow_name,
             'statusCode'         => $doc->status_code,
             'statusLabelPartner' => $this->maskStatusForPartner($doc->status_code),
@@ -179,18 +181,26 @@ class DashboardController extends Controller
                 : $doc->created_at->format('d M Y'),
         ]);
 
-        $months = collect(range(5, 0))->map(fn ($i) => now()->subMonths($i)->startOfMonth());
-        $byMonth = $docs->whereNotIn('status_code', ['draft'])
-            ->groupBy(fn (Document $d) => $d->created_at->format('Y-m'));
-        $monthlyTrend = $months->map(fn (Carbon $m) => [
-            'month' => $m->isoFormat('MMM YY'),
-            'count' => $byMonth->get($m->format('Y-m'), collect())->count(),
-        ])->values();
+        $eligibleDocs = $docs->whereNotIn('status_code', ['draft']);
+
+        [$trendMonth, $trendYear] = $this->resolveMonthYear($request, $docs->min('created_at'));
+
+        $weeklyTrend = $this->weeklyTrend(
+            Carbon::create($trendYear, $trendMonth, 1),
+            fn (Carbon $start, Carbon $end) => $eligibleDocs
+                ->filter(fn (Document $d) => $d->created_at->between($start, $end))
+                ->count(),
+        );
+
+        $availableYears = $this->availableYears($docs->min('created_at'));
 
         return Inertia::render('Dashboard/Partner', [
-            'summary'       => $summary,
-            'documents'     => $documents,
-            'monthly_trend' => $monthlyTrend,
+            'summary'          => $summary,
+            'documents'        => $documents,
+            'weekly_trend'     => $weeklyTrend,
+            'selected_month'   => $trendMonth,
+            'selected_year'    => $trendYear,
+            'available_years'  => $availableYears,
         ]);
     }
 
@@ -216,7 +226,7 @@ class DashboardController extends Controller
                 return [
                     'id'           => $doc->id,
                     'uniqueId'     => $doc->unique_id,
-                    'project'      => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+                    'project'      => $doc->link_name ?? $doc->pt_index,
                     'sow'          => $doc->sow_name,
                     'statusCode'   => $doc->status_code,
                     'levelOrder'   => $step?->level_order,
@@ -244,7 +254,7 @@ class DashboardController extends Controller
                 return [
                     'id'           => $doc->id,
                     'uniqueId'     => $doc->unique_id,
-                    'project'      => $doc->link_name ?? $doc->site_name_ne ?? $doc->pt_index,
+                    'project'      => $doc->link_name ?? $doc->pt_index,
                     'sow'          => $doc->sow_name,
                     'statusCode'   => $doc->status_code,
                     'levelOrder'   => $verification?->approvalStep?->level_order,
@@ -325,6 +335,78 @@ class DashboardController extends Controller
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * Resolve the month/year to show the trend chart for, from request params,
+     * falling back to the current month/year when missing or out of range.
+     *
+     * @return array{0: int, 1: int} [month, year]
+     */
+    private function resolveMonthYear(Request $request, string|\DateTimeInterface|null $earliestCreatedAt): array
+    {
+        $now = now();
+        $earliestYear = $earliestCreatedAt ? Carbon::parse($earliestCreatedAt)->year : $now->year;
+
+        $month = (int) $request->input('month', $now->month);
+        $year = (int) $request->input('year', $now->year);
+
+        if ($month < 1 || $month > 12) {
+            $month = $now->month;
+        }
+
+        if ($year < $earliestYear || $year > $now->year) {
+            $year = $now->year;
+        }
+
+        return [$month, $year];
+    }
+
+    /**
+     * Years that have at least one document, most recent first, for the year slicer.
+     *
+     * @return int[]
+     */
+    private function availableYears(string|\DateTimeInterface|null $earliestCreatedAt): array
+    {
+        $earliestYear = $earliestCreatedAt ? Carbon::parse($earliestCreatedAt)->year : now()->year;
+
+        return range(now()->year, $earliestYear);
+    }
+
+    /**
+     * Split the given month into Monday–Sunday weeks, clipped to the month's
+     * own start/end days (the first and last week may be shorter than 7 days).
+     *
+     * @return array<int, array{week: string, count: int}>
+     */
+    private function weeklyTrend(Carbon $monthStart, callable $counter): array
+    {
+        $monthStart = $monthStart->copy()->startOfMonth();
+        $monthEnd = $monthStart->copy()->endOfMonth();
+
+        $weeks = [];
+        $cursor = $monthStart->copy();
+
+        while ($cursor->lte($monthEnd)) {
+            $weekEnd = $cursor->copy()->endOfWeek();
+            if ($weekEnd->gt($monthEnd)) {
+                $weekEnd = $monthEnd->copy();
+            }
+
+            $label = $cursor->day === $weekEnd->day
+                ? $cursor->format('j M')
+                : $cursor->format('j').'-'.$weekEnd->format('j M');
+
+            $weeks[] = [
+                'week' => $label,
+                'count' => $counter($cursor->copy()->startOfDay(), $weekEnd->copy()->endOfDay()),
+            ];
+
+            $cursor = $weekEnd->copy()->addDay()->startOfDay();
+        }
+
+        return $weeks;
+    }
 
     private function maskStatusForPartner(string $statusCode): string
     {
