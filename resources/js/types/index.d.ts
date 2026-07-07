@@ -319,6 +319,9 @@ export interface DocumentRecord {
   sow_name: string;
   status_code: string;
   routing_pending: boolean;
+  revision_pending_review: boolean;
+  revision_placement_pending: boolean;
+  previous_pdf_rejected_level: number | null;
   date_atp_submission: string | null;
   original_pdf_path: string | null;
   template_snapshot: TemplateSnapshot;

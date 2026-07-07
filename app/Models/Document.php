@@ -33,6 +33,8 @@ class Document extends Model
         'previous_pdf_rejected_level',
         'status_code',
         'routing_pending',
+        'revision_pending_review',
+        'revision_placement_pending',
         'date_atp_submission',
         'date_atp_approved',
         'atp_punchlist',
@@ -46,6 +48,8 @@ class Document extends Model
         'date_atp_approved'           => 'date',
         'is_imported'                 => 'boolean',
         'routing_pending'             => 'boolean',
+        'revision_pending_review'     => 'boolean',
+        'revision_placement_pending'  => 'boolean',
         'previous_pdf_rejected_level' => 'integer',
     ];
 

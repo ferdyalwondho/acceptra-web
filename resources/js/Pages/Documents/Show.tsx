@@ -487,6 +487,182 @@ function RoutingPanel({
   );
 }
 
+/* ── Revision Decision Panel (Admin approve/reject a Partner-submitted revision) ── */
+
+function RevisionDecisionPanel({
+  documentId, pdfUrl, rejectedLevel,
+}: {
+  documentId: string;
+  pdfUrl: string;
+  rejectedLevel: number | null;
+}) {
+  const { t } = useTranslation();
+  const [submitting, setSubmitting] = useState(false);
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [reason, setReason] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  function submit(action: 'approve' | 'reject') {
+    if (submitting) return;
+    if (action === 'reject' && !reason.trim()) return;
+    setSubmitting(true);
+    setErrors({});
+    router.post(`/documents/${documentId}/review-revision`, {
+      action,
+      reason: action === 'reject' ? reason : undefined,
+    }, {
+      onError: (e) => setErrors(e as Record<string, string>),
+      onFinish: () => setSubmitting(false),
+    });
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-warning/40 bg-[var(--color-bg-surface)] shadow-xs">
+      <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-surface/40 px-5 py-3">
+        <AlertTriangle className="h-4 w-4 text-warning" />
+        <span className="text-sm font-semibold text-warning">
+          {t('documents.show.revision_decision_title', { level: rejectedLevel ?? '' })}
+        </span>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <p className="text-sm text-[var(--color-text-secondary)]">
+          {t('documents.show.revision_decision_body')}
+        </p>
+
+        <a
+          href={pdfUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="flex h-9 w-fit items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
+        >
+          <FileText className="h-4 w-4" /> {t('documents.show.revision_decision_view_pdf')}
+        </a>
+
+        {showRejectForm ? (
+          <div className="space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+            <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+              {t('documents.show.revision_decision_reason_label')}
+            </label>
+            <textarea
+              rows={3}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+            />
+            {errors.reason && <p className="text-xs text-danger">{errors.reason}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setShowRejectForm(false); setReason(''); }}
+                className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-white"
+              >
+                {t('documents.show.btn_batal')}
+              </button>
+              <button
+                type="button"
+                disabled={submitting || !reason.trim()}
+                onClick={() => submit('reject')}
+                className="h-9 rounded-md bg-danger px-4 text-sm font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
+              >
+                {submitting ? t('documents.show.submitting') : t('documents.show.revision_decision_reject_confirm_btn')}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => setShowRejectForm(true)}
+              className="flex h-9 items-center gap-1.5 rounded-md border border-danger/40 px-4 text-sm font-semibold text-danger transition-colors hover:bg-danger-surface disabled:opacity-50"
+            >
+              <XCircle className="h-4 w-4" /> {t('documents.show.revision_decision_reject_btn')}
+            </button>
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => submit('approve')}
+              className="flex h-9 items-center gap-1.5 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+            >
+              <CheckCircle2 className="h-4 w-4" /> {submitting ? t('documents.show.submitting') : t('documents.show.revision_decision_approve_btn')}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Revision Placement Panel (Admin places signature boxes after approving a revision) ── */
+
+function RevisionPlacementPanel({
+  documentId, pdfUrl, snapLevels, rejectedLevel,
+}: {
+  documentId: string;
+  pdfUrl: string;
+  snapLevels: TemplateLevelRecord[];
+  rejectedLevel: number | null;
+}) {
+  const { t } = useTranslation();
+  const [positions, setPositions] = useState<Record<string, Pos> | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const canSubmit = !!positions && Object.keys(positions).length > 0;
+
+  function handleSubmit() {
+    if (submitting || !canSubmit) return;
+    setSubmitting(true);
+    setErrors({});
+    const finalPositions: Record<string, PlacementPosition> = {};
+    Object.entries(positions ?? {}).forEach(([lo, pos]) => {
+      finalPositions[lo] = { page: 1, ...pos };
+    });
+    router.post(`/documents/${documentId}/finalize-revision-placement`, {
+      positions: finalPositions,
+    }, {
+      onError: (e) => setErrors(e as Record<string, string>),
+      onFinish: () => setSubmitting(false),
+    });
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-warning/40 bg-[var(--color-bg-surface)] shadow-xs">
+      <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-surface/40 px-5 py-3">
+        <AlertTriangle className="h-4 w-4 text-warning" />
+        <span className="text-sm font-semibold text-warning">
+          {t('documents.show.revision_placement_title', { level: rejectedLevel ?? '' })}
+        </span>
+      </div>
+
+      <div className="space-y-5 p-4">
+        <PlacementPanel
+          pdfUrl={pdfUrl}
+          levels={snapLevels}
+          documentId={documentId}
+          onSaved={() => {}}
+          mode="controlled"
+          onPositionsChange={setPositions}
+        />
+
+        {errors.positions && <p className="text-xs text-danger">{errors.positions}</p>}
+
+        <div className="flex items-center justify-end gap-3">
+          <button
+            disabled={submitting || !canSubmit}
+            onClick={handleSubmit}
+            title={!canSubmit ? t('documents.show.routing_panel_disabled_hint') : undefined}
+            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? t('documents.show.routing_panel_saving_btn') : t('documents.show.revision_placement_submit_btn')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Reassign Modal ─────────────────────────────────────────────────────── */
 
 function ReassignModal({
@@ -832,7 +1008,9 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const canEdit      = ['02', '05', '08', '11', '14', 'draft'].includes(statusCode);
   const canReassign  = isAdmin && !['draft', '13', '14', '15', '16'].includes(statusCode);
   // Placement is Admin-only — a Partner viewing their own document must never see or use it.
-  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending && !placementSaved && !!pdf_url;
+  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending
+    && !doc.revision_pending_review && !doc.revision_placement_pending
+    && !placementSaved && !!pdf_url;
 
   const hasPdf          = !!doc.original_pdf_path;
   const picsComplete    = doc.approval_steps.filter((s) => s.level_order > 1).every((s) => !!s.approver_id);
@@ -976,6 +1154,27 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   clusterZone={doc.cluster_zone}
                   pdfUrl={pdf_url}
                   snapLevels={snapLevels}
+                />
+              )}
+
+              {/* Partner submitted a revision after rejection — Admin must approve/reject it
+                  before signature placement is redone (placement is Admin-only). */}
+              {isAdmin && doc.revision_pending_review && pdf_url && (
+                <RevisionDecisionPanel
+                  documentId={doc.id}
+                  pdfUrl={pdf_url}
+                  rejectedLevel={doc.previous_pdf_rejected_level}
+                />
+              )}
+
+              {/* Revision approved — Admin redoes signature placement before the rejected
+                  level's approver is reactivated. */}
+              {isAdmin && doc.revision_placement_pending && pdf_url && (
+                <RevisionPlacementPanel
+                  documentId={doc.id}
+                  pdfUrl={pdf_url}
+                  snapLevels={snapLevels}
+                  rejectedLevel={doc.previous_pdf_rejected_level}
                 />
               )}
 
