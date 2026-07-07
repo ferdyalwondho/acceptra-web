@@ -117,6 +117,8 @@ Route::middleware('auth')->group(function () {
     Route::post('/documents/{id}/punchlist-revision',  [DocumentController::class, 'uploadPunchlistRevision'])->name('documents.punchlist-revision');
     Route::post('/documents/{id}/placement',[DocumentController::class, 'placement'])->name('documents.placement');
     Route::post('/documents/{id}/complete-routing', [DocumentController::class, 'completeRouting'])->name('documents.complete-routing');
+    Route::post('/documents/{id}/review-revision', [DocumentController::class, 'reviewRevision'])->name('documents.review-revision');
+    Route::post('/documents/{id}/finalize-revision-placement', [DocumentController::class, 'finalizeRevisionPlacement'])->name('documents.finalize-revision-placement');
 
     // FR-ATT: Lampiran Excel — download & delete
     Route::get('/documents/{id}/attachments/{att_id}/download',
