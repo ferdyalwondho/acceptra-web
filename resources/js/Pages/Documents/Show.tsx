@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell from '@/layouts/AppShell';
@@ -693,7 +694,7 @@ function getAuditEventType(event: string): AuditEventType {
   return 'draft';
 }
 
-function getAuditEventLabel(log: AuditLogEntry, t: (k: string, opts?: object) => string): string {
+function getAuditEventLabel(log: AuditLogEntry, t: TFunction): string {
   const key   = log.event.replace(/\./g, '_');
   const label = t(`documents.show.audit_events.${key}`, { defaultValue: log.event });
   const level = log.metadata?.level;
@@ -831,7 +832,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const canEdit      = ['02', '05', '08', '11', '14', 'draft'].includes(statusCode);
   const canReassign  = isAdmin && !['draft', '13', '14', '15', '16'].includes(statusCode);
   // Placement is Admin-only — a Partner viewing their own document must never see or use it.
-  const showPlacement = isAdmin && anchor_failed && !placementSaved && !!pdf_url;
+  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending && !placementSaved && !!pdf_url;
 
   const hasPdf          = !!doc.original_pdf_path;
   const picsComplete    = doc.approval_steps.filter((s) => s.level_order > 1).every((s) => !!s.approver_id);
