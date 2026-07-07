@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\ProfileController;
 use App\Jobs\NotifyAdminsJob;
 use App\Jobs\NotifyApproverTurnJob;
+use App\Jobs\NotifyPartnerJob;
 use App\Models\ApprovalStep;
 use App\Models\Document;
 use App\Models\InAppNotification;
@@ -322,7 +323,23 @@ class ApprovalController extends Controller
                 ->first();
 
             if ($nextStep) {
-                $advanceCode = str_pad($activeStep->level_order * 3 + 1, 2, '0', STR_PAD_LEFT);
+                // Resuming a level that was previously rejected-then-revised (Partner went
+                // through the L1 re-review gate) uses the "Done Rectification" code for that
+                // level; otherwise it's this level's normal first-time "on review" code.
+                // Based on $nextStep's own level (not $activeStep's) — these coincide for the
+                // ordinary sequential case, but diverge when $nextStep is several levels ahead
+                // of $activeStep (levels in between were auto-approved before a rejection).
+                $isResumingRejectedLevel = $document->previous_pdf_rejected_level === $nextStep->level_order;
+                $advanceCode = $isResumingRejectedLevel
+                    ? str_pad($nextStep->level_order * 3, 2, '0', STR_PAD_LEFT)
+                    : str_pad(($nextStep->level_order - 1) * 3 + 1, 2, '0', STR_PAD_LEFT);
+
+                // Approvers are already known (resuming after a revision) but the signature
+                // placement still needs to be redone for the new PDF before this level can go
+                // live — route through the same routing_pending/RoutingPanel flow used when
+                // PICs aren't assigned yet.
+                $needsPlacementRedo = $isResumingRejectedLevel
+                    && ($document->template_snapshot['placement']['status'] ?? 'pending') !== 'manual';
 
                 if ($nextStep->approver_id === null) {
                     // Partner-submitted document reaching the next level for the first time —
@@ -354,6 +371,11 @@ class ApprovalController extends Controller
                     // is_active stays false until the Admin finishes signature placement via
                     // "complete routing" — routing_pending now purely means "placement pending",
                     // since PICs are already resolved and assigned above.
+                    $document->update(['status_code' => $advanceCode, 'routing_pending' => true]);
+                    $routingPendingTriggered = true;
+                } elseif ($needsPlacementRedo) {
+                    // PICs already assigned — only signature placement needs redoing before
+                    // this (previously rejected, now revised) level goes live.
                     $document->update(['status_code' => $advanceCode, 'routing_pending' => true]);
                     $routingPendingTriggered = true;
                 } else {
@@ -455,7 +477,9 @@ class ApprovalController extends Controller
             'reject_reason' => ['required', 'string'],
         ]);
 
-        DB::transaction(function () use ($user, $document, $activeStep, $request) {
+        $isL1Gate = false;
+
+        DB::transaction(function () use ($user, $document, $activeStep, $request, &$isL1Gate) {
             $activeStep->update([
                 'status'        => 'rejected',
                 'reject_reason' => $request->input('reject_reason'),
@@ -464,13 +488,23 @@ class ApprovalController extends Controller
                 'approver_id'   => $activeStep->approver_id ?? $user->id,
             ]);
 
-            $rejectCode = str_pad($activeStep->level_order * 3 - 1, 2, '0', STR_PAD_LEFT);
+            // Rejecting L1's re-review gate (a Partner's revision of a document rejected at
+            // a higher level) reverts to THAT level's rejection code, not L1's own '02' — so
+            // the memory of "L{n} actually needs to review this" isn't lost. L1 rejecting its
+            // own genuine first-time review (previous_pdf_rejected_level null or ===1) behaves
+            // exactly as before.
+            $isL1Gate    = $activeStep->level_order === 1 && ($document->previous_pdf_rejected_level ?? 1) > 1;
+            $rejectLevel = $isL1Gate ? $document->previous_pdf_rejected_level : $activeStep->level_order;
+            $rejectCode  = str_pad($rejectLevel * 3 - 1, 2, '0', STR_PAD_LEFT);
+
             $document->update(['status_code' => $rejectCode, 'final_pdf_path' => null]);
 
             AuditService::log(
                 $document->id,
                 'step.rejected',
-                "Step L{$activeStep->level_order} rejected by {$user->name}: {$request->input('reject_reason')}",
+                $isL1Gate
+                    ? "Revision rejected at L1 review by {$user->name}: {$request->input('reject_reason')}. Reverting to L{$rejectLevel} rejected — Partner must resubmit."
+                    : "Step L{$activeStep->level_order} rejected by {$user->name}: {$request->input('reject_reason')}",
                 ['level' => $activeStep->level_order],
                 $user->id,
             );
@@ -482,10 +516,16 @@ class ApprovalController extends Controller
             ->where('is_read', false)
             ->update(['is_read' => true, 'read_at' => now()]);
 
-        NotifyAdminsJob::dispatch($document->fresh(), 'rejected');
+        if ($isL1Gate) {
+            NotifyPartnerJob::dispatch($document->fresh(), 'rejected_for_revision');
+        } else {
+            NotifyAdminsJob::dispatch($document->fresh(), 'rejected');
+        }
 
         return redirect()->route('approvals.index')
-            ->with('success', 'Revision rejected. Admin Aviat has been notified.');
+            ->with('success', $isL1Gate
+                ? 'Revision rejected. The Partner has been notified to resubmit.'
+                : 'Revision rejected. Admin Aviat has been notified.');
     }
 
     private function authorizeApprovalAccess(object $user, Document $document): void
