@@ -433,6 +433,10 @@ class ApprovalController extends Controller
             default => 'All approvals complete. Document is now ATP Done.',
         };
 
+        if ($routingPendingTriggered) {
+            return redirect()->route('documents.show', $document->id)->with('success', $flash);
+        }
+
         return redirect()->route('approvals.index')->with('success', $flash);
     }
 

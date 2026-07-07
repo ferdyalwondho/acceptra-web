@@ -141,9 +141,9 @@ export default function DashboardPartner({
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(value: number, name: string) => [
-                        t('partner_dashboard.chart_tooltip_value', { count: value }),
-                        name,
+                      formatter={(value, name) => [
+                        t('partner_dashboard.chart_tooltip_value', { count: Number(value) || 0 }),
+                        name ?? '',
                       ]}
                       contentStyle={{ fontSize: 12, borderRadius: 8 }}
                     />
@@ -211,8 +211,8 @@ export default function DashboardPartner({
                   tickLine={false}
                 />
                 <Tooltip
-                  formatter={(value: number) => [
-                    t('partner_dashboard.chart_tooltip_value', { count: value }),
+                  formatter={(value) => [
+                    t('partner_dashboard.chart_tooltip_value', { count: Number(value) || 0 }),
                     t('partner_dashboard.chart_tooltip_label'),
                   ]}
                   contentStyle={{ fontSize: 12, borderRadius: 8 }}

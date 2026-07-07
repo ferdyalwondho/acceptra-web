@@ -173,6 +173,7 @@ export interface PlacementPosition {
   y: number;
   width: number;
   height: number;
+  [key: string]: number;
 }
 
 export interface TemplateSnapshot {
