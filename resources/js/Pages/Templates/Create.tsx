@@ -48,13 +48,13 @@ export default function TemplateCreate({ available_roles }: Props) {
   }
 
   function updateLevel(index: number, field: keyof LevelRow, value: string | boolean) {
-    const updated = form.data.levels.map((l, i) => {
+    const updated = form.data.levels.map((l, i): LevelRow => {
       if (i !== index) return l;
       if (field === 'role') {
         const isApproveOnly = APPROVE_ONLY_ROLES.includes(value as string);
         return { role: value as string, requires_signature: isApproveOnly ? false : l.requires_signature };
       }
-      return { ...l, [field]: value };
+      return { role: l.role, requires_signature: value as boolean };
     });
     form.setData('levels', updated);
   }

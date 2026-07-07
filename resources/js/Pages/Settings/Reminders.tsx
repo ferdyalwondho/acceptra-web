@@ -11,6 +11,7 @@ interface ReminderSetting {
   interval_days: number;
   is_weekday_only: boolean;
   label: string;
+  [key: string]: string | number | boolean | null;
 }
 
 interface Props {
@@ -65,7 +66,7 @@ export default function SettingsReminders({ settings: initialSettings }: Props) 
   function handleSave() {
     setProcessing(true);
     router.put(
-      route('settings.reminders.update'),
+      '/settings/reminders',
       { settings },
       {
         onFinish: () => setProcessing(false),

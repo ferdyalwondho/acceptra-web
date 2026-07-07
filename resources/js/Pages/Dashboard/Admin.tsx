@@ -243,9 +243,9 @@ export default function DashboardAdmin({
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(value: number, name: string) => [
-                        t('admin_dashboard.chart_monthly_tooltip_value', { count: value }),
-                        name,
+                      formatter={(value, name) => [
+                        t('admin_dashboard.chart_monthly_tooltip_value', { count: Number(value) || 0 }),
+                        name ?? '',
                       ]}
                       contentStyle={{ fontSize: 12, borderRadius: 8 }}
                     />
@@ -315,8 +315,8 @@ export default function DashboardAdmin({
                   tickLine={false}
                 />
                 <Tooltip
-                  formatter={(value: number) => [
-                    t('admin_dashboard.chart_monthly_tooltip_value', { count: value }),
+                  formatter={(value) => [
+                    t('admin_dashboard.chart_monthly_tooltip_value', { count: Number(value) || 0 }),
                     t('admin_dashboard.chart_monthly_tooltip_label'),
                   ]}
                   contentStyle={{ fontSize: 12, borderRadius: 8 }}
@@ -362,9 +362,9 @@ export default function DashboardAdmin({
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(value: number, name: string) => [
-                        t('admin_dashboard.chart_stage_tooltip_value', { count: value }),
-                        name,
+                      formatter={(value, name) => [
+                        t('admin_dashboard.chart_stage_tooltip_value', { count: Number(value) || 0 }),
+                        name ?? '',
                       ]}
                       contentStyle={{ fontSize: 12, borderRadius: 8 }}
                     />
