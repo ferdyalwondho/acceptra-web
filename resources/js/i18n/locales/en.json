@@ -317,7 +317,16 @@
         "signature_saved": "Signature Saved",
         "signature_replaced": "Signature Replaced"
       },
-      "routing_panel_pic_auto_notice": "L2-L4 approvers are auto-assigned from the cluster mapping — only the signature placement below is required."
+      "routing_panel_pic_auto_notice": "L2-L4 approvers are auto-assigned from the cluster mapping — only the signature placement below is required.",
+      "revision_decision_title": "Revision Needs Review — L{{level}}",
+      "revision_decision_body": "The Partner uploaded a revised PDF for this document. Review it and approve or reject the revision.",
+      "revision_decision_view_pdf": "View PDF",
+      "revision_decision_approve_btn": "Approve Revision",
+      "revision_decision_reject_btn": "Reject Revision",
+      "revision_decision_reason_label": "Rejection reason",
+      "revision_decision_reject_confirm_btn": "Confirm Rejection",
+      "revision_placement_title": "Revision Approved — Placement Needed for L{{level}}",
+      "revision_placement_submit_btn": "Complete Placement & Continue"
     }
   },
   "partners": {

@@ -6,6 +6,7 @@ use App\Models\Document;
 use App\Models\InAppNotification;
 use App\Notifications\PartnerL1ApprovedNotification;
 use App\Notifications\PartnerRejectedForRevisionNotification;
+use App\Notifications\PartnerRevisionRejectedByAdminNotification;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -16,7 +17,7 @@ class NotifyPartnerJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    // event: 'l1_approved' | 'rejected_for_revision'
+    // event: 'l1_approved' | 'rejected_for_revision' | 'revision_rejected_by_admin'
     public function __construct(
         private readonly Document $document,
         private readonly string   $event,
@@ -43,6 +44,10 @@ class NotifyPartnerJob implements ShouldQueue
                 "Document requires revision: {$this->document->unique_id}",
                 "Document {$this->document->unique_id} ({$this->document->pt_index}) was rejected. Please upload a revised document.",
             ],
+            'revision_rejected_by_admin' => [
+                "Revision rejected: {$this->document->unique_id}",
+                "Document {$this->document->unique_id} ({$this->document->pt_index}) — your revision was rejected by an Admin. Please upload another revision.",
+            ],
             default => [
                 "Document update: {$this->document->unique_id}",
                 "Document {$this->document->unique_id} ({$this->document->pt_index}) has been updated.",
@@ -60,9 +65,10 @@ class NotifyPartnerJob implements ShouldQueue
             ]);
 
             match ($this->event) {
-                'l1_approved'           => $user->notify(new PartnerL1ApprovedNotification($this->document)),
-                'rejected_for_revision' => $user->notify(new PartnerRejectedForRevisionNotification($this->document)),
-                default                 => null,
+                'l1_approved'                => $user->notify(new PartnerL1ApprovedNotification($this->document)),
+                'rejected_for_revision'      => $user->notify(new PartnerRejectedForRevisionNotification($this->document)),
+                'revision_rejected_by_admin' => $user->notify(new PartnerRevisionRejectedByAdminNotification($this->document)),
+                default                      => null,
             };
         }
     }

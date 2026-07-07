@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Notifications\AdminApprovedNotification;
 use App\Notifications\AdminFlowCompletedNotification;
 use App\Notifications\AdminRejectedNotification;
+use App\Notifications\AdminRevisionNeedsReviewNotification;
 use App\Notifications\AdminRoutingNeededNotification;
 use App\Notifications\DocumentSubmittedNotification;
 use Illuminate\Bus\Queueable;
@@ -20,7 +21,7 @@ class NotifyAdminsJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    // event: 'submission' | 'approved' | 'rejected' | 'flow_completed' | 'routing_needed'
+    // event: 'submission' | 'approved' | 'rejected' | 'flow_completed' | 'routing_needed' | 'revision_needs_review'
     public function __construct(
         private readonly Document $document,
         private readonly string   $event,
@@ -60,6 +61,11 @@ class NotifyAdminsJob implements ShouldQueue
                 "Routing needed: {$this->document->unique_id}",
                 "Document {$this->document->unique_id} ({$this->document->pt_index}) passed L1 approval and needs approver routing (L2–L4) assigned before it can proceed.",
             ],
+            'revision_needs_review' => [
+                'revision_needs_review',
+                "Revision needs review: {$this->document->unique_id}",
+                "Document {$this->document->unique_id} ({$this->document->pt_index}) — the Partner uploaded a revision after rejection. Please review and approve/reject it.",
+            ],
             default => [
                 'submission',
                 "Document update: {$this->document->unique_id}",
@@ -82,8 +88,9 @@ class NotifyAdminsJob implements ShouldQueue
                 'approved'       => new AdminApprovedNotification($this->document),
                 'rejected'       => new AdminRejectedNotification($this->document, $this->rejectReason),
                 'flow_completed' => new AdminFlowCompletedNotification($this->document),
-                'routing_needed' => new AdminRoutingNeededNotification($this->document),
-                default          => new DocumentSubmittedNotification($this->document),
+                'routing_needed'         => new AdminRoutingNeededNotification($this->document),
+                'revision_needs_review'  => new AdminRevisionNeedsReviewNotification($this->document),
+                default                  => new DocumentSubmittedNotification($this->document),
             };
 
             $admin->notify($notification);

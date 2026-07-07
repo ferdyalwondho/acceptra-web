@@ -317,7 +317,16 @@
         "signature_saved": "Tanda Tangan Disimpan",
         "signature_replaced": "Tanda Tangan Diganti"
       },
-      "routing_panel_pic_auto_notice": "Approver L2-L4 sudah otomatis ter-assign dari mapping cluster — tinggal lengkapi penempatan tanda tangan di bawah ini."
+      "routing_panel_pic_auto_notice": "Approver L2-L4 sudah otomatis ter-assign dari mapping cluster — tinggal lengkapi penempatan tanda tangan di bawah ini.",
+      "revision_decision_title": "Revisi Butuh Ditinjau — L{{level}}",
+      "revision_decision_body": "Partner sudah upload PDF revisi untuk dokumen ini. Tinjau lalu setujui atau tolak revisinya.",
+      "revision_decision_view_pdf": "Lihat PDF",
+      "revision_decision_approve_btn": "Setujui Revisi",
+      "revision_decision_reject_btn": "Tolak Revisi",
+      "revision_decision_reason_label": "Alasan penolakan",
+      "revision_decision_reject_confirm_btn": "Konfirmasi Penolakan",
+      "revision_placement_title": "Revisi Disetujui — Perlu Placement untuk L{{level}}",
+      "revision_placement_submit_btn": "Selesaikan Placement & Lanjutkan"
     }
   },
   "partners": {

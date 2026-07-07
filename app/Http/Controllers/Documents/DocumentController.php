@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Documents;
 use App\Http\Controllers\Controller;
 use App\Jobs\NotifyAdminsJob;
 use App\Jobs\NotifyApproverTurnJob;
+use App\Jobs\NotifyPartnerJob;
 use App\Jobs\NotifyReassignedJob;
 use App\Models\ApprovalStep;
 use App\Models\Cluster;
@@ -189,8 +190,11 @@ class DocumentController extends Controller
                 'link_name'           => $document->link_name,
                 'cluster_zone'        => $document->cluster_zone,
                 'sow_name'            => $document->sow_name,
-                'status_code'         => $document->status_code,
-                'routing_pending'     => (bool) $document->routing_pending,
+                'status_code'                 => $document->status_code,
+                'routing_pending'             => (bool) $document->routing_pending,
+                'revision_pending_review'     => (bool) $document->revision_pending_review,
+                'revision_placement_pending'  => (bool) $document->revision_placement_pending,
+                'previous_pdf_rejected_level' => $document->previous_pdf_rejected_level,
                 'date_atp_submission' => $document->date_atp_submission?->toDateString(),
                 'original_pdf_path'   => $document->original_pdf_path,
                 'template_snapshot'   => $document->template_snapshot,
@@ -240,8 +244,9 @@ class DocumentController extends Controller
             abort_if($document->submitted_by !== $user->id, 403);
         }
         abort_if($isPunchlistRevision && ! $isAdmin, 403);
-        // Partners can only edit their own draft; admins can open edit for any non-punchlist document (e.g. rejected)
-        abort_if(! $isPunchlistRevision && ! $isAdmin && $document->status_code !== 'draft', 422);
+        // Partners can edit their own draft or a rejected document (to upload a revision);
+        // admins can open edit for any non-punchlist document (e.g. rejected).
+        abort_if(! $isPunchlistRevision && ! $isAdmin && $document->status_code !== 'draft' && ! $isRejectedRevision, 422);
 
         // Punchlist revision mode: return simplified props
         if ($isPunchlistRevision) {
@@ -617,8 +622,9 @@ class DocumentController extends Controller
 
         // Rejection codes follow level_order * 3 - 1 (02=L1, 05=L2, 08=L3, 11=L4)
         $isRejected = (bool) preg_match('/^(02|05|08|11)$/', $document->status_code ?? '');
+        // Partner (own doc, checked above) or Admin may resubmit a rejected document.
         abort_if(
-            $document->status_code !== 'draft' && ! ($isAdmin && $isRejected),
+            $document->status_code !== 'draft' && ! $isRejected,
             422,
             'Document cannot be revised in its current state.'
         );
@@ -743,10 +749,17 @@ class DocumentController extends Controller
             $rejectionLevel = (int) (((int) ltrim($document->status_code, '0') + 1) / 3);
         }
 
+        // A Partner-submitted revision of a rejected document must be reviewed (and its
+        // signature placement redone) by an Admin before the rejected level is reactivated —
+        // placement is Admin-only, so the Partner can no longer do that step themselves.
+        // An Admin revising their own rejected document still resumes immediately, unchanged.
+        $deferActivation = $isRejected && ! $isAdmin;
+
         return $this->finalizeSubmission(
             $document, $validated, $user, $isAdmin,
             $isRejected, $rejectionLevel,
             $pdfPath, $previousPdfPath, $pdfChanged, $templateChanged,
+            $deferActivation,
         );
     }
 
@@ -813,10 +826,11 @@ class DocumentController extends Controller
         ?string $previousPdfPath,
         bool $pdfChanged,
         bool $templateChanged,
+        bool $deferActivation = false,
     ): RedirectResponse {
         $nextActiveStep = null;
 
-        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, &$nextActiveStep) {
+        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, $deferActivation, &$nextActiveStep) {
             $template = Template::with('levels')->findOrFail($validated['template_id']);
 
             // Placement only needs to be redone if the PDF or the approval template changed;
@@ -869,7 +883,7 @@ class DocumentController extends Controller
                 $n            = $level->level_order;
                 $autoApproved = $rejectionLevel !== null && $n < $rejectionLevel;
                 $isActive     = $rejectionLevel !== null
-                    ? $n === $rejectionLevel
+                    ? ($n === $rejectionLevel && ! $deferActivation)
                     : $n === 1;
                 $previous     = $previousSteps->get($n);
 
@@ -896,13 +910,15 @@ class DocumentController extends Controller
             );
 
             if ($rejectionLevel !== null) {
-                // Resume from the rejected level.
-                // Pending-at-L(n) status code = advance code of L(n-1) = (n-1)*3+1, except L1 = '01'.
-                $pendingCode = $rejectionLevel === 1
-                    ? '01'
-                    : str_pad(($rejectionLevel - 1) * 3 + 1, 2, '0', STR_PAD_LEFT);
+                // Resume from the rejected level. Rejection codes are level*3-1, so the
+                // "Done Rectification - On Review Ln" code that follows is level*3
+                // (e.g. L3 rejected = '08', revised/resuming = '09').
+                $pendingCode = str_pad($rejectionLevel * 3, 2, '0', STR_PAD_LEFT);
 
-                $document->update(['status_code' => $pendingCode]);
+                $document->update([
+                    'status_code'              => $pendingCode,
+                    'revision_pending_review'  => $deferActivation,
+                ]);
 
                 $nextActiveStep = ApprovalStep::where('document_id', $document->id)
                     ->where('level_order', $rejectionLevel)
@@ -911,7 +927,9 @@ class DocumentController extends Controller
                 AuditService::log(
                     $document->id,
                     'document.revision_resubmitted',
-                    "Revision resubmitted by {$user->name}. Resuming from L{$rejectionLevel}.",
+                    $deferActivation
+                        ? "Revision resubmitted by {$user->name}. Awaiting Admin review before resuming L{$rejectionLevel}."
+                        : "Revision resubmitted by {$user->name}. Resuming from L{$rejectionLevel}.",
                     ['resumed_from_level' => $rejectionLevel],
                     $user->id,
                 );
@@ -942,8 +960,12 @@ class DocumentController extends Controller
         });
 
         if ($rejectionLevel !== null) {
-            // Notify the approver at the level resuming from
-            if ($nextActiveStep) {
+            if ($deferActivation) {
+                // Partner-submitted revision: Admin must review + redo placement before
+                // the rejected level is reactivated and its approver notified.
+                NotifyAdminsJob::dispatch($document->fresh(), 'revision_needs_review');
+            } elseif ($nextActiveStep) {
+                // Admin-submitted revision resumes immediately — notify the approver.
                 NotifyApproverTurnJob::dispatch($document->fresh(), $nextActiveStep);
             }
         } elseif ($isAdmin) {
@@ -956,9 +978,10 @@ class DocumentController extends Controller
         }
 
         $flash = match (true) {
-            $rejectionLevel !== null => "Revision resubmitted. Resumed from L{$rejectionLevel} approval.",
-            $isAdmin                 => 'Document submitted and L1 auto-approved.',
-            default                  => 'Document submitted successfully.',
+            $deferActivation          => 'Revision submitted. Waiting for Admin review before approval resumes.',
+            $rejectionLevel !== null  => "Revision resubmitted. Resumed from L{$rejectionLevel} approval.",
+            $isAdmin                  => 'Document submitted and L1 auto-approved.',
+            default                   => 'Document submitted successfully.',
         };
 
         return redirect()->route('documents.show', $document->id)
@@ -1328,6 +1351,131 @@ class DocumentController extends Controller
 
         return redirect()->route('documents.show', $document->id)
             ->with('status', 'Routing completed. L2 approver has been notified.');
+    }
+
+    // POST /documents/{id}/review-revision — Admin approves or rejects a Partner-submitted
+    // revision of a rejected document, before its signature placement is redone. Mirrors the
+    // "L1 approve -> routing_pending" shape: a single explicit decision, then a redirect to the
+    // placement step (on approve) or back to the Partner for another revision (on reject).
+    public function reviewRevision(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps')->findOrFail($id);
+
+        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
+        abort_if(! $document->revision_pending_review, 422, 'This document has no revision awaiting review.');
+
+        $validated = $request->validate([
+            'action' => ['required', 'in:approve,reject'],
+            'reason' => ['required_if:action,reject', 'nullable', 'string', 'max:2000'],
+        ]);
+
+        $level = $document->previous_pdf_rejected_level;
+
+        if ($validated['action'] === 'approve') {
+            $document->update([
+                'revision_pending_review'    => false,
+                'revision_placement_pending' => true,
+            ]);
+
+            AuditService::log(
+                $document->id,
+                'document.revision_approved',
+                "Revision approved by {$user->name}. Awaiting signature placement.",
+                ['level' => $level],
+                $user->id,
+            );
+
+            return redirect()->route('documents.show', $document->id)
+                ->with('status', 'Revision approved. Please complete the signature placement.');
+        }
+
+        // Reject: send back to the Partner for another revision.
+        $rejectionCode = str_pad($level * 3 - 1, 2, '0', STR_PAD_LEFT);
+
+        DB::transaction(function () use ($document, $level, $rejectionCode, $validated, $user) {
+            $document->update([
+                'status_code'              => $rejectionCode,
+                'revision_pending_review'  => false,
+            ]);
+
+            $document->approvalSteps()
+                ->where('level_order', $level)
+                ->update([
+                    'status'      => 'rejected',
+                    'reject_reason' => $validated['reason'],
+                    'action_at'   => now(),
+                ]);
+
+            AuditService::log(
+                $document->id,
+                'document.revision_rejected_by_admin',
+                "Revision rejected by {$user->name}: {$validated['reason']}",
+                ['level' => $level],
+                $user->id,
+            );
+        });
+
+        NotifyPartnerJob::dispatch($document->fresh(), 'revision_rejected_by_admin');
+
+        return redirect()->route('documents.show', $document->id)
+            ->with('status', 'Revision rejected. The Partner has been notified to resubmit.');
+    }
+
+    // POST /documents/{id}/finalize-revision-placement — Admin places the signature boxes on
+    // the newly-approved revision PDF, then reactivates the rejected level so its approver can
+    // resume review. Not implemented via completeRouting() because that endpoint hardcodes
+    // level_order=2 (first-time routing); here the level to reactivate varies (L1-L4).
+    public function finalizeRevisionPlacement(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps')->findOrFail($id);
+
+        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
+        abort_if(! $document->revision_placement_pending, 422, 'This document is not awaiting placement.');
+
+        $validated = $request->validate([
+            'positions'          => ['required', 'array'],
+            'positions.*.page'   => ['required', 'integer', 'min:1'],
+            'positions.*.x'      => ['required', 'numeric'],
+            'positions.*.y'      => ['required', 'numeric'],
+            'positions.*.width'  => ['required', 'numeric', 'min:1'],
+            'positions.*.height' => ['required', 'numeric', 'min:1'],
+        ]);
+
+        $level = $document->previous_pdf_rejected_level;
+        $step  = null;
+
+        DB::transaction(function () use ($document, $validated, $user, $level, &$step) {
+            $snapshot = $document->template_snapshot;
+            $snapshot['placement'] = [
+                'status'    => 'manual',
+                'positions' => $validated['positions'],
+            ];
+
+            $document->update([
+                'template_snapshot'           => $snapshot,
+                'revision_placement_pending'  => false,
+            ]);
+
+            $step = $document->approvalSteps->firstWhere('level_order', $level);
+            $step?->update(['is_active' => true]);
+
+            AuditService::log(
+                $document->id,
+                'document.revision_placement_completed',
+                "Signature placement completed by {$user->name}. Resuming L{$level} review.",
+                ['level' => $level],
+                $user->id,
+            );
+        });
+
+        if ($step) {
+            NotifyApproverTurnJob::dispatch($document->fresh(), $step->fresh());
+        }
+
+        return redirect()->route('documents.show', $document->id)
+            ->with('status', "Placement completed. L{$level} approver has been notified.");
     }
 
     // ──────────────────────────────────────────────
