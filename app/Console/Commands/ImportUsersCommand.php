@@ -50,7 +50,7 @@ class ImportUsersCommand extends Command
 
             $name = trim((string) $cells->current()->getValue());
             $cells->next();
-            $email = trim((string) $cells->current()->getValue());
+            $email = mb_strtolower(trim((string) $cells->current()->getValue()));
             $cells->next();
             $role = trim((string) $cells->current()->getValue());
             $cells->next();

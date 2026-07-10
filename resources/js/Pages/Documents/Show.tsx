@@ -78,6 +78,7 @@ const PLACEMENT_DOC_COL_X     = 220;
 function buildDefaultPositions(
   placementLevels: TemplateLevelRecord[],
   pageHeight: number,
+  isImported = false,
 ): Record<string, Pos> {
   const init: Record<string, Pos> = {};
 
@@ -90,13 +91,15 @@ function buildDefaultPositions(
     init[`${l.level_order}_name`] = { x: 20, y: baseY + PLACEMENT_NAME_GAP,   width: 160, height: 28 };
   });
 
-  // Kolom 2: overlay milik dokumen (bukan per-level), anchor ke bawah halaman
+  // Kolom 2: overlay milik dokumen (bukan per-level), anchor ke bawah halaman. Dokumen hasil
+  // Submit Ongoing (is_imported) sudah punya tanggal submit asli tercetak di PDF-nya sendiri —
+  // jangan tawarkan kotak "Tgl Submit" yang bisa menimpanya dengan tanggal import hari ini.
   const docKeys: Array<[string, number]> = [
     ['doc_submitted', 160],
     ['doc_status',    260],
     ['doc_punchlist', 220],
     ['doc_atpdate',   160],
-  ];
+  ].filter(([key]) => !(isImported && key === 'doc_submitted')) as Array<[string, number]>;
   const docStackH = docKeys.length * PLACEMENT_DOC_GAP;
   const col2Top = Math.max(10, pageHeight - PLACEMENT_MARGIN_BOTTOM - docStackH);
   docKeys.forEach(([key, w], i) => {
@@ -117,9 +120,14 @@ interface PlacementPanelProps {
   // Partner-routing RoutingPanel) can bundle positions together with PICs/Excel into one submit.
   mode?: 'standalone' | 'controlled';
   onPositionsChange?: (positions: Record<string, Pos>) => void;
+  // Submit Ongoing (imported) documents already have their real submission date printed on the
+  // original PDF — skip seeding a "Tgl Submit" box so it can't be overwritten with today's date.
+  isImported?: boolean;
 }
 
-function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalone', onPositionsChange }: PlacementPanelProps) {
+function PlacementPanel({
+  pdfUrl, levels, documentId, onSaved, mode = 'standalone', onPositionsChange, isImported = false,
+}: PlacementPanelProps) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef   = useRef<HTMLDivElement>(null);
@@ -128,9 +136,11 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
   const [saved,     setSaved]     = useState(false);
   const [canvasH,   setCanvasH]   = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Only L2+ get placement boxes; L1 is auto-approved
-  const placementLevels = levels.filter(l => l.level_order > 1);
+  // Only L2+ that actually require a signature get placement boxes — L1 is auto-approved,
+  // and approve-only levels (requires_signature=false, e.g. MS BO Team) never get stamped.
+  const placementLevels = levels.filter(l => l.level_order > 1 && l.requires_signature);
 
   const [positions, setPositions] = useState<Record<string, Pos>>({});
   const defaultsSeeded = useRef(false);
@@ -166,7 +176,7 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
 
         if (!defaultsSeeded.current) {
           defaultsSeeded.current = true;
-          setPositions(buildDefaultPositions(placementLevels, vp.height));
+          setPositions(buildDefaultPositions(placementLevels, vp.height, isImported));
         }
 
         await page.render({ canvas, viewport: vp }).promise;
@@ -232,6 +242,7 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveError(null);
     const finalPositions: Record<string, PlacementPosition> = {};
     Object.entries(positions).forEach(([lo, pos]) => {
       finalPositions[lo] = { page: 1, ...pos };
@@ -240,6 +251,16 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
       await axios.post(`/documents/${documentId}/placement`, { positions: finalPositions });
       setSaved(true);
       onSaved();
+    } catch (err) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      const serverMessage = axios.isAxiosError(err) ? err.response?.data?.message : undefined;
+      if (status === 419) {
+        setSaveError(t('documents.show.placement_session_expired'));
+      } else if (serverMessage) {
+        setSaveError(serverMessage);
+      } else {
+        setSaveError(t('documents.show.placement_save_error'));
+      }
     } finally {
       setSaving(false);
     }
@@ -330,6 +351,12 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
           })}
         </div>
 
+        {mode === 'standalone' && saveError && (
+          <div className="mt-4 rounded-lg border border-danger/30 bg-danger-surface px-4 py-3 text-xs text-danger">
+            {saveError}
+          </div>
+        )}
+
         {mode === 'standalone' && (
         <div className="mt-4 flex items-center justify-end gap-3">
           {saved && (
@@ -370,6 +397,7 @@ function RoutingPanel({
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [errors,    setErrors]    = useState<Record<string, string>>({});
+  const [generalError, setGeneralError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!templateId || !clusterZone) return;
@@ -388,6 +416,7 @@ function RoutingPanel({
     if (submitting || !canSubmit) return;
     setSubmitting(true);
     setErrors({});
+    setGeneralError(null);
     const finalPositions: Record<string, PlacementPosition> = {};
     Object.entries(positions ?? {}).forEach(([lo, pos]) => {
       finalPositions[lo] = { page: 1, ...pos };
@@ -398,6 +427,24 @@ function RoutingPanel({
     }, {
       forceFormData: true,
       onError: (e) => setErrors(e as Record<string, string>),
+      // onError only fires for Laravel ValidationExceptions. A raw abort_if() (e.g. the
+      // "not awaiting routing" guard) or a 500 surfaces as onHttpException instead — without
+      // this, those responses were silently dropped and the Save button just reset with no
+      // feedback at all, which is what looked like a frozen/unresponsive save. Returning
+      // `false` also suppresses Inertia's own raw technical-error dialog so our friendly
+      // banner is the only thing the admin sees.
+      onHttpException: (response) => {
+        const data = response.data;
+        const message = typeof data === 'object' && data !== null && 'message' in data
+          ? String((data as { message?: unknown }).message)
+          : undefined;
+        setGeneralError(message || t('documents.show.placement_save_error'));
+        return false;
+      },
+      onNetworkError: () => {
+        setGeneralError(t('documents.show.placement_save_error'));
+        return false;
+      },
       onFinish: () => setSubmitting(false),
     });
   }
@@ -471,6 +518,14 @@ function RoutingPanel({
           )}
           {errors.excel_file && <p className="mt-1 text-xs text-danger">{errors.excel_file}</p>}
         </div>
+
+        {(generalError || Object.entries(errors).some(([key]) => key !== 'excel_file')) && (
+          <div className="rounded-lg border border-danger/30 bg-danger-surface px-4 py-3 text-xs text-danger">
+            {generalError
+              ?? Object.entries(errors).find(([key]) => key !== 'excel_file')?.[1]
+              ?? t('documents.show.placement_save_error')}
+          </div>
+        )}
 
         <div className="flex items-center justify-end gap-3">
           <button
@@ -985,6 +1040,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   pdfUrl={pdf_url!}
                   levels={snapLevels}
                   documentId={doc.id}
+                  isImported={doc.is_imported}
                   onSaved={() => {
                     setPlacementSaved(true);
                     router.reload({ only: ['document', 'anchor_failed'] });

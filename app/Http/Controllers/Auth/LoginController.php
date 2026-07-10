@@ -30,6 +30,10 @@ class LoginController extends Controller
             'password.required' => 'Password harus diisi.',
         ]);
 
+        // Email is stored lowercase (see User::email() mutator) — normalize the login
+        // input too so casing never affects whether the account is found.
+        $credentials['email'] = mb_strtolower(trim($credentials['email']));
+
         if (! Auth::attempt($credentials, $request->boolean('remember'))) {
             return back()->withErrors(['email' => 'Email atau password salah.']);
         }

@@ -319,6 +319,7 @@ export interface DocumentRecord {
   sow_name: string;
   status_code: string;
   routing_pending: boolean;
+  is_imported: boolean;
   date_atp_submission: string | null;
   original_pdf_path: string | null;
   template_snapshot: TemplateSnapshot;

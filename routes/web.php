@@ -127,6 +127,9 @@ Route::middleware('auth')->group(function () {
     // FR-SUB API: fetch template level structure for PIC slot population
     Route::get('/api/templates/{id}/levels', [TemplateController::class, 'levels'])->name('api.templates.levels');
 
+    // Live duplicate check for unique_id / pt_index before the user submits the form
+    Route::get('/api/documents/check-duplicate', [DocumentController::class, 'checkDuplicate'])->name('api.documents.check-duplicate');
+
     /* ── Approvals ── */
     Route::get('/approvals',         [ApprovalController::class, 'index'])->name('approvals.index');
     Route::get('/approvals/history', [ApprovalController::class, 'history'])->name('approvals.history');

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Head, Link, useForm } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import {
   ArrowLeft,
@@ -204,6 +205,9 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
     form.setData('levels', updated);
   }
 
+  const uniqueIdDup = useDuplicateCheck('unique_id', form.data.unique_id);
+  const ptIndexDup  = useDuplicateCheck('pt_index', form.data.pt_index);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     form.post('/documents/submit-ongoing', { forceFormData: true });
@@ -273,14 +277,20 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
           <div className="grid gap-4 sm:grid-cols-2">
             {/* Unique ID */}
             <div className="sm:col-span-2">
-              <Field label="Unique ID" required error={form.errors.unique_id}>
+              <Field
+                label="Unique ID"
+                required
+                error={form.errors.unique_id ?? (uniqueIdDup.duplicate ? 'Unique ID ini sudah digunakan — silakan pilih yang lain.' : undefined)}
+              >
                 <input
                   type="text"
                   value={form.data.unique_id}
+                  maxLength={50}
                   onChange={(e) => form.setData('unique_id', e.target.value.toUpperCase())}
                   placeholder="Contoh: ACC-2026-0001"
-                  className={inputCls}
+                  className={cn(inputCls, uniqueIdDup.duplicate && 'border-danger')}
                 />
+                {uniqueIdDup.checking && <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">Memeriksa…</p>}
               </Field>
             </div>
 
@@ -314,19 +324,24 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
 
             {/* PT Index */}
             <div className="sm:col-span-2">
-              <Field label="PT Index" required error={form.errors.pt_index}>
+              <Field
+                label="PT Index"
+                required
+                error={form.errors.pt_index ?? (ptIndexDup.duplicate ? 'PT Index ini sudah digunakan — silakan pilih yang lain.' : undefined)}
+              >
                 <input
                   type="text"
                   value={form.data.pt_index}
                   onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
                   placeholder="Contoh: PTI-2026-001"
-                  className={inputCls}
+                  className={cn(inputCls, ptIndexDup.duplicate && 'border-danger')}
                 />
+                {ptIndexDup.checking && <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">Memeriksa…</p>}
               </Field>
             </div>
 
             {/* Project Code */}
-            <Field label="Project Code" error={form.errors.project_code}>
+            <Field label="Project Code" required error={form.errors.project_code}>
               <input
                 type="text"
                 value={form.data.project_code}
@@ -337,7 +352,7 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
             </Field>
 
             {/* Link ID */}
-            <Field label="Link ID" error={form.errors.link_id}>
+            <Field label="Link ID" required error={form.errors.link_id}>
               <input
                 type="text"
                 value={form.data.link_id}
@@ -348,7 +363,7 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
 
             {/* Link Name */}
             <div className="sm:col-span-2">
-              <Field label="Link Name" error={form.errors.link_name}>
+              <Field label="Link Name" required error={form.errors.link_name}>
                 <input
                   type="text"
                   value={form.data.link_name}
@@ -576,6 +591,9 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
 
         {/* ─── 4. Upload PDF ─── */}
         <Section step={4} title="Upload PDF (Partial-Signed)" done={pdfDone}>
+          <p className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
+            PDF <span className="text-danger">*</span>
+          </p>
           <p className="mb-4 text-xs text-[var(--color-text-secondary)]">
             Upload PDF yang sudah punya tanda tangan offline. Kotak TTD digital yang masih kosong
             akan diisi sistem saat approver pending menyetujui.
@@ -631,7 +649,12 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
           </Link>
           <button
             type="submit"
-            disabled={form.processing}
+            disabled={
+              form.processing
+              || !pdfDone
+              || uniqueIdDup.duplicate || uniqueIdDup.checking
+              || ptIndexDup.duplicate || ptIndexDup.checking
+            }
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {form.processing ? 'Menyimpan…' : 'Submit Dokumen'}

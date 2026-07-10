@@ -88,6 +88,16 @@ class PartnerController extends Controller
     {
         abort_if(! in_array($request->user()->role, self::ADMIN_ROLES), 403);
 
+        // Normalize before validating so the unique:users,email check compares against the
+        // same lowercase form the User::email() mutator stores (see FR-AUTH email case fix).
+        $request->merge([
+            'email' => mb_strtolower(trim((string) $request->input('email'))),
+            'pics'  => collect($request->input('pics', []))->map(fn ($pic) => [
+                ...$pic,
+                'email' => mb_strtolower(trim((string) ($pic['email'] ?? ''))),
+            ])->all(),
+        ]);
+
         $validated = $request->validate([
             'name'            => ['required', 'string', 'max:200'],
             'email'           => ['required', 'email'],
@@ -171,6 +181,16 @@ class PartnerController extends Controller
         abort_if(! in_array($request->user()->role, self::ADMIN_ROLES), 403);
 
         $partner = Partner::findOrFail($id);
+
+        // Normalize before validating so the manual duplicate check below (and the
+        // User::email() mutator on create) compare against a consistent lowercase form.
+        $request->merge([
+            'email' => mb_strtolower(trim((string) $request->input('email'))),
+            'pics'  => collect($request->input('pics', []))->map(fn ($pic) => [
+                ...$pic,
+                'email' => mb_strtolower(trim((string) ($pic['email'] ?? ''))),
+            ])->all(),
+        ]);
 
         // Validasi struktur dasar (id dibiarkan string — empty string = PIC baru)
         $validated = $request->validate([
