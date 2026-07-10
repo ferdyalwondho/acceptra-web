@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Head, Link, useForm } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
 import type { PageProps, PartnerOption, TemplateOption, TemplateLevelOption, ClusterOption } from '@/types';
@@ -135,6 +136,8 @@ export default function DocumentEdit({
     excel_file:        null,
     _draft:            false,
   });
+
+  const ptIndexDup = useDuplicateCheck('pt_index', form.data.pt_index, doc.id);
 
   // Fetch template levels whenever template changes
   useEffect(() => {
@@ -367,19 +370,26 @@ export default function DocumentEdit({
             </div>
 
             <div className="sm:col-span-2">
-              <Field label="PT Index" required error={form.errors.pt_index}>
+              <Field
+                label="PT Index"
+                required
+                error={form.errors.pt_index ?? (ptIndexDup.duplicate ? 'PT Index ini sudah digunakan — silakan pilih yang lain.' : undefined)}
+              >
                 <input
                   type="text"
                   placeholder="mis. PT.2024.001"
                   value={form.data.pt_index}
                   onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
-                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  className={cn(is_rejected_revision ? lockedInputCls : inputCls, ptIndexDup.duplicate && 'border-danger')}
                   disabled={is_rejected_revision}
                 />
+                {!is_rejected_revision && ptIndexDup.checking && (
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">Memeriksa…</p>
+                )}
               </Field>
             </div>
 
-            <Field label="Project Code" error={form.errors.project_code}>
+            <Field label="Project Code" required error={form.errors.project_code}>
               <input
                 type="text"
                 placeholder="MW-BKS-2406"
@@ -389,7 +399,7 @@ export default function DocumentEdit({
                 disabled={is_rejected_revision}
               />
             </Field>
-            <Field label="Link ID" error={form.errors.link_id}>
+            <Field label="Link ID" required error={form.errors.link_id}>
               <input
                 type="text"
                 placeholder="LNK-001"
@@ -400,7 +410,7 @@ export default function DocumentEdit({
               />
             </Field>
             <div className="sm:col-span-2">
-              <Field label="Link Name" error={form.errors.link_name}>
+              <Field label="Link Name" required error={form.errors.link_name}>
                 <input
                   type="text"
                   placeholder="Microwave Link – Bekasi Sektor 4"
@@ -609,7 +619,7 @@ export default function DocumentEdit({
             <button
               type="button"
               onClick={() => submit(true)}
-              disabled={form.processing}
+              disabled={form.processing || ptIndexDup.duplicate}
               className="h-9 rounded-md border border-[var(--color-border-strong)] bg-white px-5 text-sm font-semibold text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-bg-subtle)] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
             >
               {form.processing ? 'Memproses…' : 'Simpan Draft'}
@@ -619,7 +629,8 @@ export default function DocumentEdit({
             type="submit"
             disabled={
               form.processing || !pdfReady || (is_rejected_revision && !form.data.pdf_file) ||
-              (is_admin_submit && !is_rejected_revision && levels.length > 0 && !allPicsFilled)
+              (is_admin_submit && !is_rejected_revision && levels.length > 0 && !allPicsFilled) ||
+              (!is_rejected_revision && (ptIndexDup.duplicate || ptIndexDup.checking))
             }
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
           >

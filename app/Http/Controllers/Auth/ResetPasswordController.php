@@ -36,8 +36,13 @@ class ResetPasswordController extends Controller
             'password.confirmed'=> 'Konfirmasi password tidak cocok.',
         ]);
 
+        // Email is stored lowercase (see User::email() mutator) — normalize the lookup
+        // input too so casing never affects whether the account is found.
+        $credentials = $request->only('email', 'password', 'password_confirmation', 'token');
+        $credentials['email'] = mb_strtolower(trim($credentials['email']));
+
         $status = Password::reset(
-            $request->only('email', 'password', 'password_confirmation', 'token'),
+            $credentials,
             function (User $user, string $password) {
                 $user->forceFill(['password' => $password])->save();
                 event(new PasswordReset($user));

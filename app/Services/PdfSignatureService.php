@@ -105,6 +105,7 @@ class PdfSignatureService
             $tempParsable = $this->decompressPdf($tempInput);
 
             $pdf       = new Fpdi('P', 'pt');
+            $pdf->SetFillColor(255, 255, 255);
             $pageCount = $pdf->setSourceFile($tempParsable);
 
             for ($p = 1; $p <= $pageCount; $p++) {
@@ -169,12 +170,12 @@ class PdfSignatureService
 
                         $nameFontSize = $this->fitFontSize($pdf, $step->approver->name, $w, $nameRowH, 'B');
                         $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
-                        $pdf->Cell($w, $nameFontSize, $step->approver->name, 0, 0, 'L');
+                        $pdf->Cell($w, $nameFontSize, $step->approver->name, 0, 0, 'L', true);
 
                         if ($dateText) {
                             $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
                             $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
-                            $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L');
+                            $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', true);
                         }
                     }
                 }
@@ -238,7 +239,7 @@ class PdfSignatureService
 
         $pdf->SetTextColor(0, 0, 0);
         $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
-        $pdf->Cell($w, $fontSize, $text, 0, 0, 'C');
+        $pdf->Cell($w, $fontSize, $text, 0, 0, 'C', true);
     }
 
     /**

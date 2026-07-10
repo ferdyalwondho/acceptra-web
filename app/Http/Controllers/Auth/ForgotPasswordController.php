@@ -28,7 +28,9 @@ class ForgotPasswordController extends Controller
             'email.email'    => 'Format email tidak valid.',
         ]);
 
-        Password::sendResetLink($request->only('email'));
+        // Email is stored lowercase (see User::email() mutator) — normalize the lookup
+        // input too so casing never affects whether the account is found.
+        Password::sendResetLink(['email' => mb_strtolower(trim($request->input('email')))]);
 
         return back()->with('status', 'Jika email Anda terdaftar, link reset password telah dikirimkan.');
     }

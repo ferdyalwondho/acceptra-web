@@ -3,6 +3,7 @@ import { Head, Link, useForm } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
 import type { PageProps, PartnerOption, TemplateOption, TemplateLevelOption, ClusterOption } from '@/types';
@@ -105,6 +106,9 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
     _draft: false,
   });
 
+  const uniqueIdDup = useDuplicateCheck('unique_id', form.data.unique_id);
+  const ptIndexDup  = useDuplicateCheck('pt_index', form.data.pt_index);
+
   // Fetch template levels when template changes
   useEffect(() => {
     if (!form.data.template_id) {
@@ -206,14 +210,22 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
             )}
 
             <div className="sm:col-span-2">
-              <Field label={t('documents_create.field_unique_id')} required error={form.errors.unique_id}>
+              <Field
+                label={t('documents_create.field_unique_id')}
+                required
+                error={form.errors.unique_id ?? (uniqueIdDup.duplicate ? t('documents_create.duplicate_unique_id') : undefined)}
+              >
                 <input
                   type="text"
                   placeholder={t('documents_create.placeholder_unique_id')}
                   value={form.data.unique_id}
+                  maxLength={50}
                   onChange={(e) => form.setData('unique_id', e.target.value.toUpperCase())}
-                  className={inputCls}
+                  className={cn(inputCls, uniqueIdDup.duplicate && 'border-danger')}
                 />
+                {uniqueIdDup.checking && (
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{t('documents_create.checking_duplicate')}</p>
+                )}
               </Field>
             </div>
 
@@ -229,18 +241,25 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
             </div>
 
             <div className="sm:col-span-2">
-              <Field label={t('documents_create.field_pt_index')} required error={form.errors.pt_index}>
+              <Field
+                label={t('documents_create.field_pt_index')}
+                required
+                error={form.errors.pt_index ?? (ptIndexDup.duplicate ? t('documents_create.duplicate_pt_index') : undefined)}
+              >
                 <input
                   type="text"
                   placeholder={t('documents_create.placeholder_pt_index')}
                   value={form.data.pt_index}
                   onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
-                  className={inputCls}
+                  className={cn(inputCls, ptIndexDup.duplicate && 'border-danger')}
                 />
+                {ptIndexDup.checking && (
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{t('documents_create.checking_duplicate')}</p>
+                )}
               </Field>
             </div>
 
-            <Field label={t('documents_create.field_project_code')} error={form.errors.project_code}>
+            <Field label={t('documents_create.field_project_code')} required error={form.errors.project_code}>
               <input
                 type="text"
                 placeholder="MW-BKS-2406"
@@ -249,7 +268,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
                 className={inputCls}
               />
             </Field>
-            <Field label={t('documents_create.field_link_id')} error={form.errors.link_id}>
+            <Field label={t('documents_create.field_link_id')} required error={form.errors.link_id}>
               <input
                 type="text"
                 placeholder="LNK-001"
@@ -259,7 +278,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
               />
             </Field>
             <div className="sm:col-span-2">
-              <Field label={t('documents_create.field_link_name')} error={form.errors.link_name}>
+              <Field label={t('documents_create.field_link_name')} required error={form.errors.link_name}>
                 <input
                   type="text"
                   placeholder="Microwave Link – Bekasi Sektor 4"
@@ -475,7 +494,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
           </Link>
           <button
             type="button"
-            disabled={form.processing}
+            disabled={form.processing || uniqueIdDup.duplicate || ptIndexDup.duplicate}
             onClick={() => submit(true)}
             className="h-9 rounded-md border border-[var(--color-border-strong)] bg-white px-5 text-sm font-medium transition-colors hover:bg-[var(--color-bg-subtle)] disabled:opacity-50"
           >
@@ -483,7 +502,12 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
           </button>
           <button
             type="submit"
-            disabled={form.processing || (is_admin_submit && levels.length > 0 && !allPicsFilled)}
+            disabled={
+              form.processing
+              || (is_admin_submit && levels.length > 0 && !allPicsFilled)
+              || uniqueIdDup.duplicate || uniqueIdDup.checking
+              || ptIndexDup.duplicate || ptIndexDup.checking
+            }
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
           >
             {form.processing ? t('documents_create.btn_processing') : t('documents_create.btn_submit')}

@@ -191,6 +191,7 @@ class DocumentController extends Controller
                 'sow_name'            => $document->sow_name,
                 'status_code'         => $document->status_code,
                 'routing_pending'     => (bool) $document->routing_pending,
+                'is_imported'         => (bool) $document->is_imported,
                 'date_atp_submission' => $document->date_atp_submission?->toDateString(),
                 'original_pdf_path'   => $document->original_pdf_path,
                 'template_snapshot'   => $document->template_snapshot,
@@ -1038,12 +1039,12 @@ class DocumentController extends Controller
 
         // ── 1. Basic validation ──────────────────────────────────────────────
         $validated = $request->validate([
-            'unique_id'               => ['required', 'string', 'max:20', 'unique:documents,unique_id'],
+            'unique_id'               => ['required', 'string', 'max:50', 'unique:documents,unique_id'],
             'vendor_contractor'      => ['required', 'string', 'max:200'],
-            'pt_index'               => ['required', 'string', 'max:100'],
-            'project_code'           => ['nullable', 'string', 'max:100'],
-            'link_id'                => ['nullable', 'string', 'max:100'],
-            'link_name'              => ['nullable', 'string', 'max:200'],
+            'pt_index'               => ['required', 'string', 'max:100', 'unique:documents,pt_index'],
+            'project_code'           => ['required', 'string', 'max:100'],
+            'link_id'                => ['required', 'string', 'max:100'],
+            'link_name'              => ['required', 'string', 'max:200'],
             'cluster_zone'           => ['required', 'string', 'max:255', Rule::exists('clusters', 'display_name')->where('status', 'active')],
             'template_id'            => ['required', 'uuid', Rule::exists('templates', 'id')->where('status', 'active')],
             'partner_id'             => ['required', 'uuid', 'exists:partners,id'],
@@ -1060,6 +1061,10 @@ class DocumentController extends Controller
             'unique_id.unique'           => 'This Unique ID is already in use — please choose another one.',
             'vendor_contractor.required' => 'Vendor/Contractor is required.',
             'pt_index.required'          => 'PT Index is required.',
+            'pt_index.unique'            => 'This PT Index is already in use — please choose another one.',
+            'project_code.required'      => 'Project Code is required.',
+            'link_id.required'           => 'Link ID is required.',
+            'link_name.required'         => 'Link Name is required.',
             'cluster_zone.required'      => 'Cluster Zone is required.',
             'cluster_zone.exists'        => 'Please select a valid, active cluster.',
             'template_id.required'       => 'Please select a SOW template.',
@@ -1371,6 +1376,24 @@ class DocumentController extends Controller
             ->with('status', "Routing completed. L{$targetStep?->level_order} approver has been notified.");
     }
 
+    // GET /api/documents/check-duplicate?field=unique_id|pt_index&value=X&ignore_id=uuid
+    // Lets the create/edit form warn the user about a duplicate before they submit,
+    // instead of only finding out from the form's error response after posting.
+    public function checkDuplicate(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'field'     => ['required', 'string', Rule::in(['unique_id', 'pt_index'])],
+            'value'     => ['required', 'string'],
+            'ignore_id' => ['nullable', 'uuid'],
+        ]);
+
+        $exists = Document::where($validated['field'], $validated['value'])
+            ->when($validated['ignore_id'] ?? null, fn ($q, $ignoreId) => $q->where('id', '!=', $ignoreId))
+            ->exists();
+
+        return response()->json(['duplicate' => $exists]);
+    }
+
     // ──────────────────────────────────────────────
     // Private helpers
     // ──────────────────────────────────────────────
@@ -1380,17 +1403,19 @@ class DocumentController extends Controller
         $requirePdf = $requirePdf ?? ! $isDraft;
 
         $uniqueIdRule = Rule::unique('documents', 'unique_id');
+        $ptIndexRule  = Rule::unique('documents', 'pt_index');
         if ($ignoreDocumentId) {
             $uniqueIdRule = $uniqueIdRule->ignore($ignoreDocumentId);
+            $ptIndexRule  = $ptIndexRule->ignore($ignoreDocumentId);
         }
 
         $rules = [
-            'unique_id'         => ['required', 'string', 'max:20', $uniqueIdRule],
+            'unique_id'         => ['required', 'string', 'max:50', $uniqueIdRule],
             'vendor_contractor' => ['required', 'string', 'max:200'],
-            'pt_index'          => ['required', 'string', 'max:100'],
-            'project_code'      => ['nullable', 'string', 'max:100'],
-            'link_id'           => ['nullable', 'string', 'max:100'],
-            'link_name'         => ['nullable', 'string', 'max:200'],
+            'pt_index'          => ['required', 'string', 'max:100', $ptIndexRule],
+            'project_code'      => ['required', 'string', 'max:100'],
+            'link_id'           => ['required', 'string', 'max:100'],
+            'link_name'         => ['required', 'string', 'max:200'],
             'cluster_zone'      => ['required', 'string', 'max:255', Rule::exists('clusters', 'display_name')->where('status', 'active')],
             'template_id'       => ['required', 'uuid', Rule::exists('templates', 'id')->where('status', 'active')],
             'pdf_file'          => [$requirePdf ? 'required' : 'nullable', 'file', 'mimes:pdf', 'max:20480'],
@@ -1408,6 +1433,10 @@ class DocumentController extends Controller
             'unique_id.required'         => 'Unique ID is required.',
             'unique_id.unique'           => 'This Unique ID is already in use — please choose another one.',
             'pt_index.required'          => 'PT Index is required.',
+            'pt_index.unique'            => 'This PT Index is already in use — please choose another one.',
+            'project_code.required'      => 'Project Code is required.',
+            'link_id.required'           => 'Link ID is required.',
+            'link_name.required'         => 'Link Name is required.',
             'cluster_zone.required'      => 'Cluster Zone is required.',
             'cluster_zone.exists'        => 'Please select a valid, active cluster.',
             'template_id.required'       => 'Please select a SOW template.',
