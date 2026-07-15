@@ -64,17 +64,23 @@ class ApprovalController extends Controller
             // An approver's queue includes both their active approval step AND any
             // pending punchlist verification — the latter has no active ApprovalStep
             // (the approval chain already finished), so it needs its own clause here
-            // or it silently never appears in the list.
+            // or it silently never appears in the list. A PunchlistVerification row
+            // stays 'pending' through the whole '14' (awaiting upload) AND '15'
+            // (awaiting verification) window, so it must also be scoped to '15' —
+            // otherwise a not-yet-actionable '14' document wrongly shows up here too.
             $docs = Document::with(['partner', 'approvalSteps.approver'])
                 ->where(function ($q) use ($user) {
                     $q->whereHas('approvalSteps', fn ($sq) =>
                             $sq->where('approver_id', $user->id)
                                ->where('is_active', true)
                         )
-                        ->orWhereHas('punchlistVerifications', fn ($pq) =>
-                            $pq->where('approver_id', $user->id)
-                               ->where('status', 'pending')
-                        );
+                        ->orWhere(function ($oq) use ($user) {
+                            $oq->where('status_code', '15')
+                                ->whereHas('punchlistVerifications', fn ($pq) =>
+                                    $pq->where('approver_id', $user->id)
+                                       ->where('status', 'pending')
+                                );
+                        });
                 })
                 ->orderByDesc('date_atp_submission')
                 ->get();
@@ -120,11 +126,11 @@ class ApprovalController extends Controller
                     'rejected' => 'Punchlist Revision Rejected',
                     default    => $actionLabels[$myStep?->status] ?? $myStep?->status ?? '—',
                 };
-                $myDate = match ($myVerification?->status) {
-                    'verified' => $myVerification->verified_at?->format('d M Y'),
-                    'rejected' => $myVerification->updated_at?->format('d M Y'),
-                    default    => $myStep?->action_at?->format('d M Y'),
-                } ?? '—';
+                $myDateRaw = match ($myVerification?->status) {
+                    'verified' => $myVerification->verified_at,
+                    'rejected' => $myVerification->updated_at,
+                    default    => $myStep?->action_at,
+                };
 
                 return [
                     'id'         => $doc->id,
@@ -133,7 +139,8 @@ class ApprovalController extends Controller
                     'sow'        => $doc->sow_name,
                     'statusCode' => $doc->status_code,
                     'myAction'   => $myAction,
-                    'myDate'     => $myDate,
+                    'myDate'     => $myDateRaw?->format('d M Y') ?? '—',
+                    'myDateSort' => $myDateRaw?->toISOString(),
                 ];
             })
             ->values()

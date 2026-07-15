@@ -1,9 +1,11 @@
+import { useMemo, useState } from 'react';
 import { Head, Link } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
 import StatusBadge from '@/components/acceptra/StatusBadge';
-import { Download, Search } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Download, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ATP_STATUS } from '@/lib/status';
 
 interface HistoryItem {
   id: string;
@@ -13,20 +15,92 @@ interface HistoryItem {
   statusCode: string;
   myAction: string;
   myDate: string;
+  myDateSort: string | null;
 }
 
 interface Props {
   items?: HistoryItem[];
 }
 
+type SortCol = 'uniqueId' | 'myAction' | 'statusCode' | 'myDateSort';
+type ActionFilter = 'all' | 'approved' | 'punchlist' | 'rejected';
+
 export default function ApprovalsHistory({ items = [] }: Props) {
   const { t } = useTranslation();
+
+  const [search,       setSearch]       = useState('');
+  const [actionFilter, setActionFilter] = useState<ActionFilter>('all');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sortCol,       setSortCol]     = useState<SortCol | null>(null);
+  const [sortDir,       setSortDir]     = useState<'asc' | 'desc'>('desc');
 
   const actionColor: Record<string, string> = {
     [t('approvals.action_approved')]:  'text-success',
     [t('approvals.action_punchlist')]: 'text-warning',
     [t('approvals.action_rejected')]:  'text-danger',
   };
+
+  function matchesActionFilter(item: HistoryItem): boolean {
+    if (actionFilter === 'all') return true;
+    const action = item.myAction.toLowerCase();
+    if (actionFilter === 'rejected')  return action.includes('reject');
+    if (actionFilter === 'punchlist') return action.includes('punchlist');
+    return action.includes('approved') || action.includes('verified');
+  }
+
+  function handleSort(col: SortCol) {
+    if (sortCol === col) {
+      setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'));
+    } else {
+      setSortCol(col);
+      setSortDir('desc');
+    }
+  }
+
+  function sortIcon(col: SortCol) {
+    if (sortCol !== col) return <ArrowUpDown className="h-3 w-3 text-[var(--color-text-tertiary)]" />;
+    return sortDir === 'asc'
+      ? <ArrowUp className="h-3 w-3 text-brand-ink" />
+      : <ArrowDown className="h-3 w-3 text-brand-ink" />;
+  }
+
+  const visibleItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    let result = items.filter((item) => {
+      if (statusFilter && item.statusCode !== statusFilter) return false;
+      if (!matchesActionFilter(item)) return false;
+      if (q) {
+        const haystack = `${item.uniqueId} ${item.project} ${item.sow}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (sortCol) {
+      result = [...result].sort((a, b) => {
+        let cmp = 0;
+        if (sortCol === 'myDateSort') {
+          cmp = (a.myDateSort ?? '').localeCompare(b.myDateSort ?? '');
+        } else {
+          cmp = a[sortCol].localeCompare(b[sortCol]);
+        }
+        return sortDir === 'asc' ? cmp : -cmp;
+      });
+    }
+
+    return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, search, actionFilter, statusFilter, sortCol, sortDir]);
+
+  const tableColumns: Array<{ label: string; col: SortCol | null }> = [
+    { label: t('approvals.history_col_uid'),       col: 'uniqueId' },
+    { label: t('approvals.history_col_project'),   col: null },
+    { label: t('approvals.history_col_sow'),       col: null },
+    { label: t('approvals.history_col_my_action'), col: 'myAction' },
+    { label: t('approvals.history_col_status'),    col: 'statusCode' },
+    { label: t('approvals.history_col_date'),      col: 'myDateSort' },
+  ];
 
   return (
     <AppShell>
@@ -40,15 +114,33 @@ export default function ApprovalsHistory({ items = [] }: Props) {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             placeholder={t('approvals.history_search_placeholder')}
             className="h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white pl-9 pr-3 text-sm placeholder:text-[var(--color-text-tertiary)] transition-colors duration-[120ms] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
           />
         </div>
-        <select className="h-9 rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm text-[var(--color-text-secondary)] focus:border-brand focus:outline-none">
-          <option>{t('approvals.history_filter_all')}</option>
-          <option>{t('approvals.history_filter_approved')}</option>
-          <option>{t('approvals.history_filter_punchlist')}</option>
-          <option>{t('approvals.history_filter_rejected')}</option>
+        <select
+          value={actionFilter}
+          onChange={(e) => setActionFilter(e.target.value as ActionFilter)}
+          className="h-9 rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm text-[var(--color-text-secondary)] focus:border-brand focus:outline-none"
+        >
+          <option value="all">{t('approvals.history_filter_all')}</option>
+          <option value="approved">{t('approvals.history_filter_approved')}</option>
+          <option value="punchlist">{t('approvals.history_filter_punchlist')}</option>
+          <option value="rejected">{t('approvals.history_filter_rejected')}</option>
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="h-9 rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm text-[var(--color-text-secondary)] focus:border-brand focus:outline-none"
+        >
+          <option value="">{t('approvals.history_status_filter_all')}</option>
+          {Object.entries(ATP_STATUS)
+            .filter(([code]) => code !== 'draft')
+            .map(([code, info]) => (
+              <option key={code} value={code}>{code} · {info.label}</option>
+            ))}
         </select>
       </div>
 
@@ -57,6 +149,10 @@ export default function ApprovalsHistory({ items = [] }: Props) {
           <p className="text-sm font-medium text-[var(--color-text-primary)]">{t('approvals.history_empty_title')}</p>
           <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">{t('approvals.history_empty_body')}</p>
         </div>
+      ) : visibleItems.length === 0 ? (
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-5 py-12 text-center shadow-xs">
+          <p className="text-sm font-medium text-[var(--color-text-primary)]">{t('approvals.history_no_match_title')}</p>
+        </div>
       ) : (
         <>
           {/* Desktop table */}
@@ -64,24 +160,30 @@ export default function ApprovalsHistory({ items = [] }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-subtle)]">
-                  {[
-                    t('approvals.history_col_uid'),
-                    t('approvals.history_col_project'),
-                    t('approvals.history_col_sow'),
-                    t('approvals.history_col_my_action'),
-                    t('approvals.history_col_status'),
-                    t('approvals.history_col_date'),
-                    '',
-                  ].map((h, i) => (
-                    <th key={i} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">{h}</th>
+                  {tableColumns.map(({ label, col }) => (
+                    <th key={label} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+                      {col ? (
+                        <span className="inline-flex items-center gap-1">
+                          {label}
+                          <button
+                            type="button"
+                            onClick={() => handleSort(col)}
+                            className="rounded p-0.5 hover:bg-[var(--color-bg-subtle)]"
+                          >
+                            {sortIcon(col)}
+                          </button>
+                        </span>
+                      ) : label}
+                    </th>
                   ))}
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border)]">
-                {items.map((item) => (
+                {visibleItems.map((item) => (
                   <tr key={item.id} className="transition-colors hover:bg-[var(--color-bg-subtle)]">
                     <td className="px-5 py-3.5">
-                      <Link href={`/documents/${item.id}`} className="font-mono text-xs text-ming hover:underline">{item.uniqueId}</Link>
+                      <Link href={`/documents/${item.id}?from=history`} className="font-mono text-xs text-ming hover:underline">{item.uniqueId}</Link>
                     </td>
                     <td className="px-5 py-3.5 font-medium text-[var(--color-text-primary)]">{item.project}</td>
                     <td className="px-5 py-3.5 text-xs text-[var(--color-text-secondary)]">{item.sow}</td>
@@ -107,10 +209,10 @@ export default function ApprovalsHistory({ items = [] }: Props) {
 
           {/* Mobile cards */}
           <div className="grid gap-3 md:hidden">
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <Link
                 key={item.id}
-                href={`/documents/${item.id}`}
+                href={`/documents/${item.id}?from=history`}
                 className="block rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4 transition-colors duration-[120ms] hover:bg-[var(--color-bg-subtle)] shadow-xs"
               >
                 <div className="mb-1 flex items-center justify-between gap-2">

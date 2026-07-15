@@ -870,6 +870,15 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     window.history.replaceState({}, '', url.toString());
   };
 
+  // Approvers have no "Documents" entry in their nav — a document opened from
+  // History must return there on Back, not to /documents (which they can't browse).
+  const cameFromHistory = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('from') === 'history';
+  const backHref  = cameFromHistory ? '/approvals/history' : '/documents';
+  const backLabel = cameFromHistory
+    ? t('documents.show.breadcrumb_back_history')
+    : t('documents.show.breadcrumb_back');
+
   const handleDeleteAttachment = () => {
     if (!excel_attachment || deletingAtt) return;
     setDeletingAtt(true);
@@ -961,8 +970,8 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
 
       {/* Breadcrumb */}
       <div className="mb-4 flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
-        <Link href="/documents" className="flex items-center gap-1 transition-colors hover:text-ming">
-          <ArrowLeft className="h-3.5 w-3.5" /> {t('documents.show.breadcrumb_back')}
+        <Link href={backHref} className="flex items-center gap-1 transition-colors hover:text-ming">
+          <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
         </Link>
         <span>/</span>
         <span className="font-mono text-[var(--color-text-primary)]">{doc.unique_id}</span>
