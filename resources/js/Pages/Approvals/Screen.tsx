@@ -514,33 +514,24 @@ export default function ApprovalScreen({
       </div>
 
       {isVerifyingWithRevision ? (
-        // Verify mode: the revised PDF is what needs review, so it's the one embedded —
-        // the original just becomes a labeled download-only box below.
-        <div className="flex flex-1 flex-col gap-2">
-          {pdf_url && (
-            <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2">
-              <FileText className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]" />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium text-[var(--color-text-primary)]">PDF Utama</p>
-                <p className="text-[11px] text-[var(--color-text-secondary)]">
-                  Dokumen asli sebelum revisi punchlist — belum berubah.
-                </p>
+        // Verify mode: same dual side-by-side layout as the reject-flow's L1 gate below —
+        // the pre-revision PDF on the left, the punchlist revision on the right.
+        <div className={cn('grid flex-1 gap-4', previous_pdf_url ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1')}>
+          {previous_pdf_url && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 rounded-md bg-[var(--color-bg-subtle)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)]">
+                <FileText className="h-3.5 w-3.5" /> PDF Utama (Sebelum Revisi)
               </div>
-              <a
-                href={pdf_url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex shrink-0 h-7 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
-              >
-                <Download className="h-3.5 w-3.5" /> Download
-              </a>
+              <PdfViewer url={previous_pdf_url} placements={null} className="flex-1" />
             </div>
           )}
-          <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
-            <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Punchlist
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
+              <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Punchlist
+            </div>
+            {revisionPdfMeta}
+            <PdfViewer url={punchlist_revision_pdf!.url} placements={null} className="flex-1" />
           </div>
-          {revisionPdfMeta}
-          <PdfViewer url={punchlist_revision_pdf!.url} placements={null} className="flex-1" />
         </div>
       ) : (
         // PDF Viewer — dual view saat ada PDF yang direject sebelumnya di level ini

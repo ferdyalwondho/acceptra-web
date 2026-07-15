@@ -239,6 +239,13 @@ class ApprovalController extends Controller
                     ->first();
 
                 $props['mode'] = 'verify';
+                // Verify mode always shows the pre-revision PDF side by side with the
+                // revision, if one exists — unlike $showPreviousPdf above (which is scoped
+                // to the reject-flow's L1 gate and requires an active step that doesn't
+                // exist here, since the approval chain already finished before verification).
+                $props['previous_pdf_url'] = $document->previous_pdf_path
+                    ? route('documents.pdf.previous', $document->id)
+                    : null;
                 $props['my_punchlist'] = $myStep ? [
                     'notes'      => $myStep->punchlist_notes,
                     'created_at' => $myStep->action_at?->toISOString(),
