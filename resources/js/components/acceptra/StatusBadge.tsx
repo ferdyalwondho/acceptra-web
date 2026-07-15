@@ -22,7 +22,7 @@ export default function StatusBadge({ code, size = 'md', className }: Props) {
       title={status.label}
     >
       <span className="font-mono text-[10px] opacity-60 tabular-nums">{code}</span>
-      {size === 'md' && <span>{status.label}</span>}
+      <span>{status.label}</span>
     </span>
   );
 }
