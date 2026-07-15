@@ -46,7 +46,10 @@ class PunchlistController extends Controller
                     ->exists();
 
                 if ($allVerified) {
-                    $document->update(['status_code' => '16']);
+                    // Status changes are stamped onto the cached final PDF — invalidate
+                    // it so /documents/{id}/pdf regenerates with the '16' label instead
+                    // of continuing to serve the '15'-stamped copy forever.
+                    $document->update(['status_code' => '16', 'final_pdf_path' => null]);
 
                     AuditService::log(
                         $document->id,
@@ -62,7 +65,7 @@ class PunchlistController extends Controller
                     'notes'  => $request->input('notes'),
                 ]);
 
-                $document->update(['status_code' => '14']);
+                $document->update(['status_code' => '14', 'final_pdf_path' => null]);
 
                 // Reset other verifications to pending so admin can re-upload
                 $document->punchlistVerifications()
