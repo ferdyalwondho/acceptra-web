@@ -233,6 +233,7 @@ class DocumentController extends Controller
             ->findOrFail($id);
 
         $isAdmin              = in_array($user->role, self::ADMIN_ROLES);
+        $isOwningPartner      = $user->role === 'partner' && $document->submitted_by === $user->id;
         $isPunchlistRevision  = $document->status_code === '14';
         $isRejectedRevision   = (bool) preg_match('/^(02|05|08|11)$/', $document->status_code ?? '');
 
@@ -240,7 +241,8 @@ class DocumentController extends Controller
         if (! $isAdmin) {
             abort_if($document->submitted_by !== $user->id, 403);
         }
-        abort_if($isPunchlistRevision && ! $isAdmin, 403);
+        // Both Admin and the owning Partner (Subcon) may upload a punchlist revision.
+        abort_if($isPunchlistRevision && ! $isAdmin && ! $isOwningPartner, 403);
         // Partners can edit their own draft or a rejected document (to upload a revision);
         // admins can open edit for any non-punchlist document (e.g. rejected).
         abort_if(! $isPunchlistRevision && ! $isAdmin && $document->status_code !== 'draft' && ! $isRejectedRevision, 422);
@@ -265,7 +267,7 @@ class DocumentController extends Controller
                     'pics'        => [],
                 ],
                 'templates'              => [],
-                'is_admin_submit'        => true,
+                'is_admin_submit'        => $isAdmin,
                 'is_punchlist_revision'  => true,
                 'last_revision_filename' => $lastRevision?->original_filename,
                 'atp_punchlist'          => $document->atp_punchlist,
@@ -321,22 +323,27 @@ class DocumentController extends Controller
         return Inertia::render('Documents/Edit', $props);
     }
 
-    // POST /documents/{id}/punchlist-revision — Admin upload PDF revisi punchlist
+    // POST /documents/{id}/punchlist-revision — Admin or the owning Partner (Subcon)
+    // uploads the revised PDF for a punchlist rectification.
     public function uploadPunchlistRevision(Request $request, string $id): RedirectResponse
     {
         $user     = $request->user();
-        $document = Document::findOrFail($id);
+        $document = Document::with('approvalSteps')->findOrFail($id);
 
-        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
+        $isAdmin         = in_array($user->role, self::ADMIN_ROLES);
+        $isOwningPartner = $user->role === 'partner' && $document->submitted_by === $user->id;
+
+        abort_if(! $isAdmin && ! $isOwningPartner, 403);
         abort_if($document->status_code !== '14', 422, 'Document is not in punchlist revision state.');
 
         $request->validate([
             'pdf_file' => ['required', 'file', 'mimes:pdf', 'max:20480'],
         ]);
 
-        $pdfPath = $request->file('pdf_file')->store('documents/punchlist-revisions');
+        $pdfPath          = $request->file('pdf_file')->store('documents/punchlist-revisions');
+        $previousPdfPath  = $document->original_pdf_path;
 
-        DB::transaction(function () use ($user, $document, $pdfPath, $request) {
+        DB::transaction(function () use ($user, $document, $pdfPath, $previousPdfPath, $request, $isAdmin) {
             DocumentAttachment::create([
                 'document_id'       => $document->id,
                 'type'              => 'punchlist_revision',
@@ -346,21 +353,54 @@ class DocumentController extends Controller
                 'uploaded_by'       => $user->id,
             ]);
 
-            $document->update(['status_code' => '15']);
+            // The revised PDF becomes the document's official PDF — the signature
+            // placement redo and the final signed output must both reflect it.
+            $snapshot = $document->template_snapshot;
+            $snapshot['placement'] = ['status' => 'pending', 'positions' => null];
+
+            $document->update([
+                'previous_pdf_path'  => $previousPdfPath,
+                'original_pdf_path'  => $pdfPath,
+                'final_pdf_path'     => null,
+                'template_snapshot'  => $snapshot,
+                'status_code'        => $isAdmin ? '14' : '17',
+                'routing_pending'    => $isAdmin,
+            ]);
+
+            if (! $isAdmin) {
+                // Subcon upload: reactivate the L1 gate — Admin must sanity-check the
+                // revision before it proceeds to placement, reusing the same ApprovalStep
+                // row rather than deleting/recreating it (L2-L4 rows must stay frozen).
+                $document->approvalSteps()->where('level_order', 1)->update([
+                    'status'          => 'pending',
+                    'is_active'       => true,
+                    'approver_id'     => null,
+                    'action_at'       => null,
+                    'reject_reason'   => null,
+                    'signature_id'    => null,
+                    'punchlist_notes' => null,
+                ]);
+            }
 
             AuditService::log(
                 $document->id,
                 'punchlist.revision_uploaded',
-                "Punchlist revision PDF uploaded by {$user->name}",
+                "Punchlist revision PDF uploaded by {$user->name}" . ($isAdmin ? '' : ' (Subcon — awaiting L1 review)'),
                 [],
                 $user->id,
             );
         });
 
-        \App\Jobs\NotifyPunchlistRevisedJob::dispatch($document->fresh());
+        if ($isAdmin) {
+            NotifyAdminsJob::dispatch($document->fresh(), 'routing_needed');
+        } else {
+            NotifyAdminsJob::dispatch($document->fresh(), 'submission');
+        }
 
         return redirect()->route('documents.show', $document->id)
-            ->with('success', 'Punchlist revision uploaded. Approvers have been notified.');
+            ->with('success', $isAdmin
+                ? 'Punchlist revision uploaded. Please complete signature placement next.'
+                : 'Punchlist revision uploaded. Admin will review it before placement.');
     }
 
     // POST /documents/{id}/reassign
@@ -1317,9 +1357,15 @@ class DocumentController extends Controller
 
         $validated = $request->validate($rules, $messages);
 
+        // A punchlist revision's placement (both Admin-direct and post-L1-gate Subcon
+        // paths) always arrives here at status '14' with no pending L2+ step, since
+        // those levels are frozen from the original approval chain — no other caller
+        // reaches this endpoint in that state, so it's an unambiguous signal.
+        $isPunchlistPlacement = $document->status_code === '14';
+
         $targetStep = null;
 
-        DB::transaction(function () use ($request, $user, $document, $validated, &$targetStep) {
+        DB::transaction(function () use ($request, $user, $document, $validated, $isPunchlistPlacement, &$targetStep) {
             // Activate the next pending level (approver_id was already assigned when L1
             // was approved). This is L2 for a first-time routing, or whichever level is
             // resuming after a Partner's revision of a rejected document — found generically
@@ -1354,10 +1400,25 @@ class DocumentController extends Controller
                 $excelReplaced = true;
             }
 
-            $document->update([
+            $updateData = [
                 'template_snapshot' => $snapshot,
                 'routing_pending'   => false,
-            ]);
+            ];
+
+            if ($isPunchlistPlacement) {
+                $updateData['status_code'] = '15';
+
+                // Reset every flagging approver's verification (including anyone who
+                // already verified or rejected a previous round) so this fresh revision
+                // is reviewed from scratch by all of them.
+                $document->punchlistVerifications()->update([
+                    'status'      => 'pending',
+                    'verified_at' => null,
+                    'notes'       => null,
+                ]);
+            }
+
+            $document->update($updateData);
 
             AuditService::log(
                 $document->id,
@@ -1368,12 +1429,16 @@ class DocumentController extends Controller
             );
         });
 
-        if ($targetStep) {
+        if ($isPunchlistPlacement) {
+            \App\Jobs\NotifyPunchlistRevisedJob::dispatch($document->fresh());
+        } elseif ($targetStep) {
             NotifyApproverTurnJob::dispatch($document->fresh(), $targetStep->fresh());
         }
 
         return redirect()->route('documents.show', $document->id)
-            ->with('status', "Routing completed. L{$targetStep?->level_order} approver has been notified.");
+            ->with('status', $isPunchlistPlacement
+                ? 'Placement completed. Punchlist verifiers have been notified.'
+                : "Routing completed. L{$targetStep?->level_order} approver has been notified.");
     }
 
     // GET /api/documents/check-duplicate?field=unique_id|pt_index&value=X&ignore_id=uuid

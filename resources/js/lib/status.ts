@@ -18,6 +18,7 @@ export const ATP_STATUS: Record<string, { label: string; category: StatusCategor
   '14': { label: 'ATP Done with Punchlist – Need Rectification',  category: 'warning', icon: 'ClipboardList' },
   '15': { label: 'Punchlist Revised – Waiting Verification',      category: 'warning', icon: 'Clock' },
   '16': { label: 'Closed – Punchlist Verified',                   category: 'success', icon: 'Lock' },
+  '17': { label: 'Punchlist Revision – On Review L1',             category: 'warning', icon: 'Clock' },
 };
 
 export const CATEGORY_CLASS: Record<StatusCategory, string> = {

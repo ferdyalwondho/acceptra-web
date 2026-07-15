@@ -6,12 +6,12 @@ const DEBOUNCE_MS = 500;
 // Debounced check against GET /api/documents/check-duplicate — warns the user that a
 // unique_id/pt_index value is already taken before they submit the form, instead of only
 // finding out from the server's validation error after posting.
-export function useDuplicateCheck(field: 'unique_id' | 'pt_index', value: string, ignoreId?: string) {
+export function useDuplicateCheck(field: 'unique_id' | 'pt_index', value: string | undefined, ignoreId?: string) {
   const [duplicate, setDuplicate] = useState(false);
   const [checking, setChecking]   = useState(false);
 
   useEffect(() => {
-    const trimmed = value.trim();
+    const trimmed = (value ?? '').trim();
     if (!trimmed) {
       setDuplicate(false);
       setChecking(false);

@@ -145,10 +145,15 @@ class ApprovalController extends Controller
         $excelAttachment = $document->attachments->firstWhere('type', 'excel');
 
         // Show the previously-rejected PDF side by side only to the approver whose
-        // level actually rejected it — not any other level in the chain.
+        // level actually rejected it — not any other level in the chain. Also shown
+        // to Admin reviewing a punchlist revision's L1 gate (status '17'), which
+        // deliberately never sets previous_pdf_rejected_level.
         $showPreviousPdf = $document->previous_pdf_path
             && $activeStep
-            && (int) $document->previous_pdf_rejected_level === (int) $activeStep->level_order;
+            && (
+                (int) $document->previous_pdf_rejected_level === (int) $activeStep->level_order
+                || ($document->status_code === '17' && $activeStep->level_order === 1)
+            );
 
         $canAct     = false;
         $myStepDone = null;
@@ -322,7 +327,14 @@ class ApprovalController extends Controller
                 ->orderBy('level_order')
                 ->first();
 
-            if ($nextStep) {
+            if ($document->status_code === '17' && $activeStep->level_order === 1) {
+                // L1 gate for a Subcon-uploaded punchlist revision — a sanity check only,
+                // not a resume of the frozen L2-L4 chain. Once approved, the document
+                // moves straight to placement for the new PDF (reusing the same
+                // routing_pending/RoutingPanel machinery as the reject-flow's L1 gate).
+                $document->update(['status_code' => '14', 'routing_pending' => true]);
+                $routingPendingTriggered = true;
+            } elseif ($nextStep) {
                 // Resuming a level that was previously rejected-then-revised (Partner went
                 // through the L1 re-review gate) uses the "Done Rectification" code for that
                 // level; otherwise it's this level's normal first-time "on review" code.
@@ -449,6 +461,7 @@ class ApprovalController extends Controller
         }
 
         $flash = match (true) {
+            $routingPendingTriggered && $document->fresh()->status_code === '14' => 'Punchlist revision approved. Signature placement is needed before verification can proceed.',
             $routingPendingTriggered => 'L1 approved. This document needs approver routing (L2–L4) assigned before it can proceed.',
             $nextStep !== null => 'Approval recorded. Next approver has been notified.',
             $document->fresh()->status_code === '14' => 'ATP Done with Punchlist. Admin can now upload the revised document.',
@@ -477,9 +490,10 @@ class ApprovalController extends Controller
             'reject_reason' => ['required', 'string'],
         ]);
 
-        $isL1Gate = false;
+        $isL1Gate          = false;
+        $isPunchlistL1Gate = false;
 
-        DB::transaction(function () use ($user, $document, $activeStep, $request, &$isL1Gate) {
+        DB::transaction(function () use ($user, $document, $activeStep, $request, &$isL1Gate, &$isPunchlistL1Gate) {
             $activeStep->update([
                 'status'        => 'rejected',
                 'reject_reason' => $request->input('reject_reason'),
@@ -487,6 +501,26 @@ class ApprovalController extends Controller
                 'is_active'     => false,
                 'approver_id'   => $activeStep->approver_id ?? $user->id,
             ]);
+
+            // Rejecting the L1 gate of a Subcon-uploaded punchlist revision is a distinct
+            // case from the reject-flow's own L1 gate below — it must never fall through to
+            // that branch (which reads previous_pdf_rejected_level, reserved for reject-flow
+            // semantics only) and simply reverts to '14' so the Subcon can re-upload.
+            $isPunchlistL1Gate = $activeStep->level_order === 1 && $document->status_code === '17';
+
+            if ($isPunchlistL1Gate) {
+                $document->update(['status_code' => '14', 'final_pdf_path' => null]);
+
+                AuditService::log(
+                    $document->id,
+                    'step.rejected',
+                    "Punchlist revision rejected at L1 review by {$user->name}: {$request->input('reject_reason')}. Subcon must re-upload.",
+                    ['level' => $activeStep->level_order],
+                    $user->id,
+                );
+
+                return;
+            }
 
             // Rejecting L1's re-review gate (a Partner's revision of a document rejected at
             // a higher level) reverts to THAT level's rejection code, not L1's own '02' — so
@@ -516,10 +550,15 @@ class ApprovalController extends Controller
             ->where('is_read', false)
             ->update(['is_read' => true, 'read_at' => now()]);
 
-        if ($isL1Gate) {
+        if ($isPunchlistL1Gate || $isL1Gate) {
             NotifyPartnerJob::dispatch($document->fresh(), 'rejected_for_revision');
         } else {
             NotifyAdminsJob::dispatch($document->fresh(), 'rejected');
+        }
+
+        if ($isPunchlistL1Gate) {
+            return redirect()->route('approvals.index')
+                ->with('success', 'Punchlist revision rejected. The Subcon has been notified to re-upload.');
         }
 
         return redirect()->route('approvals.index')
