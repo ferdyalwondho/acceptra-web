@@ -238,12 +238,15 @@ class DashboardController extends Controller
         // Documents awaiting this user's punchlist verification — these have no active
         // ApprovalStep (the approval chain already finished), so they need their own
         // query or they silently never show up here (same gap fixed earlier for /approvals).
+        // A PunchlistVerification row stays 'pending' through both '14' (awaiting
+        // upload) and '15' (awaiting verification) — only '15' is actually actionable.
         $pendingPunchlistVerifications = Document::with([
                 'punchlistVerifications' => fn ($q) =>
                     $q->where('approver_id', $user->id)
                       ->where('status', 'pending'),
                 'punchlistVerifications.approvalStep',
             ])
+            ->where('status_code', '15')
             ->whereHas('punchlistVerifications', fn ($q) =>
                 $q->where('approver_id', $user->id)
                   ->where('status', 'pending')
@@ -283,9 +286,12 @@ class DashboardController extends Controller
             ->whereIn('status', ['approved', 'offline_approved', 'skipped'])
             ->count();
 
-        // Punchlist not yet revised = my PunchlistVerification still pending
+        // Punchlist awaiting my verification — scoped to status '15' only, same as
+        // $pendingPunchlistVerifications above, so this count matches what's actually
+        // actionable (a '14' document hasn't had its revision uploaded yet).
         $punchlistPendingCount = PunchlistVerification::where('approver_id', $user->id)
             ->where('status', 'pending')
+            ->whereHas('document', fn ($q) => $q->where('status_code', '15'))
             ->count();
 
         // Rejected and document not yet revised by admin
