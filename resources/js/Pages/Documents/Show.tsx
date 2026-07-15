@@ -381,13 +381,14 @@ function PlacementPanel({
 /* ── Routing Panel (Partner-submitted documents, post-L1-approve) ──────── */
 
 function RoutingPanel({
-  documentId, templateId, clusterZone, pdfUrl, snapLevels,
+  documentId, templateId, clusterZone, pdfUrl, snapLevels, variant = 'routing',
 }: {
   documentId: string;
   templateId: string;
   clusterZone: string | null;
   pdfUrl: string;
   snapLevels: TemplateLevelRecord[];
+  variant?: 'routing' | 'punchlist';
 }) {
   const { t } = useTranslation();
   const [resolvedApprovers, setResolvedApprovers] = useState<Array<{
@@ -400,7 +401,10 @@ function RoutingPanel({
   const [generalError, setGeneralError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!templateId || !clusterZone) return;
+    // Punchlist placement: L2-L4 approvers are already frozen from the original
+    // approval chain, not re-resolved from the cluster mapping — re-resolving here
+    // could even show different names if the mapping changed since original approval.
+    if (variant === 'punchlist' || !templateId || !clusterZone) return;
     axios
       .get<{ data: typeof resolvedApprovers }>('/api/clusters/resolve', {
         params: { cluster: clusterZone, template_id: templateId },
@@ -408,7 +412,7 @@ function RoutingPanel({
       .then(({ data }) => setResolvedApprovers(data.data))
       .catch(() => setResolvedApprovers([]));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId, clusterZone]);
+  }, [variant, templateId, clusterZone]);
 
   const canSubmit = !!positions && Object.keys(positions).length > 0;
 
@@ -457,25 +461,28 @@ function RoutingPanel({
       </div>
 
       <div className="space-y-5 p-4">
-        {/* PIC per Level — read-only, auto-resolved from the cluster at L1-approval time */}
-        <div>
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
-            {t('documents.show.routing_panel_pic_heading')}
-          </p>
-          <p className="mb-3 text-xs text-[var(--color-text-secondary)]">
-            {t('documents.show.routing_panel_pic_auto_notice')}
-          </p>
-          <div className="space-y-2">
-            {resolvedApprovers.map((r) => (
-              <div key={r.level_order} className="flex items-center gap-3 text-sm">
-                <span className="w-44 shrink-0 font-medium text-[var(--color-text-secondary)]">
-                  L{r.level_order} — {r.role_label}
-                </span>
-                <span className="text-[var(--color-text-primary)]">{r.approver?.name ?? '—'}</span>
-              </div>
-            ))}
+        {/* PIC per Level — read-only, auto-resolved from the cluster at L1-approval time.
+            Not applicable to a punchlist placement: those levels are already frozen. */}
+        {variant !== 'punchlist' && (
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+              {t('documents.show.routing_panel_pic_heading')}
+            </p>
+            <p className="mb-3 text-xs text-[var(--color-text-secondary)]">
+              {t('documents.show.routing_panel_pic_auto_notice')}
+            </p>
+            <div className="space-y-2">
+              {resolvedApprovers.map((r) => (
+                <div key={r.level_order} className="flex items-center gap-3 text-sm">
+                  <span className="w-44 shrink-0 font-medium text-[var(--color-text-secondary)]">
+                    L{r.level_order} — {r.role_label}
+                  </span>
+                  <span className="text-[var(--color-text-primary)]">{r.approver?.name ?? '—'}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Placement — controlled, embedded in this single form */}
         <PlacementPanel
@@ -884,10 +891,19 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const statusCode   = doc.status_code;
   const isDone       = ['13', '16'].includes(statusCode);
   const isDraft      = statusCode === 'draft';
-  const canEdit      = ['02', '05', '08', '11', '14', 'draft'].includes(statusCode);
-  const canReassign  = isAdmin && !['draft', '13', '14', '15', '16'].includes(statusCode);
+  // '14' (punchlist revision) is only editable by Admin or the document's owning Partner —
+  // never a Partner viewing someone else's document, and never '17' (L1 gate, no edit page).
+  const isOwningPartner  = isPartner && doc.submitter?.id === auth.user?.id;
+  const canEditPunchlist = statusCode === '14' && (isAdmin || isOwningPartner);
+  const canEdit      = canEditPunchlist || ['02', '05', '08', '11', 'draft'].includes(statusCode);
+  const canReassign  = isAdmin && !['draft', '13', '14', '15', '16', '17'].includes(statusCode);
+  const hasActiveL1Step = doc.approval_steps.some((s) => s.level_order === 1 && s.is_active);
   // Placement is Admin-only — a Partner viewing their own document must never see or use it.
-  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending && !placementSaved && !!pdf_url;
+  // Also excluded during any punchlist stage/L1-gate window, so the standalone panel can't
+  // be used to bypass the intended upload → (L1 gate) → placement sequencing.
+  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending && !placementSaved && !!pdf_url
+    && !hasActiveL1Step
+    && !['14', '15', '16', '17'].includes(statusCode);
 
   const hasPdf          = !!doc.original_pdf_path;
   const picsComplete    = doc.approval_steps.filter((s) => s.level_order > 1).every((s) => !!s.approver_id);
@@ -1031,6 +1047,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   clusterZone={doc.cluster_zone}
                   pdfUrl={pdf_url}
                   snapLevels={snapLevels}
+                  variant={statusCode === '14' ? 'punchlist' : 'routing'}
                 />
               )}
 
@@ -1130,13 +1147,20 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                           ))}
                         </div>
                       )}
-                      {statusCode === '14' && isAdmin && (
+                      {canEditPunchlist && (
                         <Link
                           href={`/documents/${doc.id}/edit`}
                           className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-ink px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-hover"
                         >
                           <RotateCcw className="h-3.5 w-3.5" /> {t('documents.show.btn_upload_revisi')}
                         </Link>
+                      )}
+                      {statusCode === '17' && (
+                        <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
+                          {isPartner
+                            ? 'Menunggu Admin (L1) me-review revisi yang kamu upload.'
+                            : 'Revisi punchlist dari Subcon menunggu approval L1 kamu.'}
+                        </p>
                       )}
                       {statusCode === '15' && (
                         <p className="mt-2 text-xs text-[var(--color-text-secondary)]">

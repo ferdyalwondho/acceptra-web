@@ -12,7 +12,9 @@ interface DraftDoc {
   unique_id: string;
   status_code: string;
   vendor_contractor: string;
-  pt_index: string;
+  // Omitted by the backend in punchlist-revision mode (edit() returns a simplified
+  // props shape there) — must stay optional, not just typed as required-but-actually-missing.
+  pt_index?: string;
   project_code: string;
   link_id: string;
   link_name: string;
@@ -125,7 +127,7 @@ export default function DocumentEdit({
   }>({
     unique_id:          doc.unique_id,
     vendor_contractor: doc.vendor_contractor,
-    pt_index:          doc.pt_index,
+    pt_index:          doc.pt_index ?? '',
     project_code:      doc.project_code,
     link_id:           doc.link_id,
     link_name:         doc.link_name,
@@ -204,6 +206,15 @@ export default function DocumentEdit({
           title={`Upload PDF Revisi Punchlist — ${doc.unique_id}`}
           description="Upload PDF yang sudah direvisi sesuai catatan punchlist dari approver."
         />
+
+        <div className="mb-4 flex items-start gap-3 rounded-lg border border-brand/20 bg-brand-surface/40 p-4 text-sm text-brand-ink">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            {is_admin_submit
+              ? 'Setelah upload, kamu akan diarahkan untuk menempatkan ulang posisi tanda tangan (placement) sebelum verifikasi punchlist dibuka.'
+              : 'Setelah upload, revisi ini akan direview lebih dulu oleh Admin (L1) sebelum lanjut ke penempatan tanda tangan.'}
+          </span>
+        </div>
 
         {atp_punchlist && (
           <div className="mb-4 max-w-3xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
