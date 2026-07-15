@@ -100,7 +100,7 @@ class ApprovalController extends Controller
             'skipped'                 => 'Skipped',
         ];
 
-        $items = Document::with(['approvalSteps'])
+        $items = Document::with(['approvalSteps', 'punchlistVerifications'])
             ->whereHas('approvalSteps', fn ($q) =>
                 $q->where('approver_id', $user->id)
                   ->whereIn('status', ['approved', 'approved_with_punchlist', 'rejected', 'offline_approved', 'skipped'])
@@ -109,15 +109,31 @@ class ApprovalController extends Controller
             ->limit(100)
             ->get()
             ->map(function (Document $doc) use ($user, $actionLabels) {
-                $myStep = $doc->approvalSteps->firstWhere('approver_id', $user->id);
+                $myStep         = $doc->approvalSteps->firstWhere('approver_id', $user->id);
+                $myVerification = $doc->punchlistVerifications->firstWhere('approver_id', $user->id);
+
+                // A punchlist verification action supersedes the frozen ApprovalStep
+                // status ('approved_with_punchlist' never changes once set) — reflect
+                // what the approver actually did most recently instead of stale history.
+                $myAction = match ($myVerification?->status) {
+                    'verified' => 'Punchlist Revision Verified',
+                    'rejected' => 'Punchlist Revision Rejected',
+                    default    => $actionLabels[$myStep?->status] ?? $myStep?->status ?? '—',
+                };
+                $myDate = match ($myVerification?->status) {
+                    'verified' => $myVerification->verified_at?->format('d M Y'),
+                    'rejected' => $myVerification->updated_at?->format('d M Y'),
+                    default    => $myStep?->action_at?->format('d M Y'),
+                } ?? '—';
+
                 return [
                     'id'         => $doc->id,
                     'uniqueId'   => $doc->unique_id,
                     'project'    => $doc->link_name ?? $doc->pt_index,
                     'sow'        => $doc->sow_name,
                     'statusCode' => $doc->status_code,
-                    'myAction'   => $actionLabels[$myStep?->status] ?? $myStep?->status ?? '—',
-                    'myDate'     => $myStep?->action_at?->format('d M Y') ?? '—',
+                    'myAction'   => $myAction,
+                    'myDate'     => $myDate,
                 ];
             })
             ->values()
