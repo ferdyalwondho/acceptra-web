@@ -110,6 +110,10 @@ export default function DocumentEdit({
   const [loadingLevels, setLoadingLevels] = useState(false);
   const [resolvedApprovers, setResolvedApprovers] = useState<ResolvedApprover[]>([]);
   const [resolving, setResolving] = useState(false);
+  // The document already carries a real cluster_zone from when it was originally
+  // submitted — treat that as already "manually set" so switching templates during
+  // a revision never silently overwrites it with a template's default cluster.
+  const [clusterEditedManually, setClusterEditedManually] = useState(!!doc.cluster_zone);
 
   const form = useForm<{
     unique_id: string;
@@ -174,6 +178,16 @@ export default function DocumentEdit({
       .finally(() => setResolving(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id, form.data.cluster_zone, is_admin_submit, is_rejected_revision]);
+
+  // Sync Cluster Zone to the selected template's default cluster whenever the
+  // template changes — unless Cluster Zone has already been set manually (either
+  // by the admin, or because this document already carried a real cluster_zone).
+  useEffect(() => {
+    if (clusterEditedManually || !form.data.template_id) return;
+    const tpl = templates.find((t) => t.id === form.data.template_id);
+    if (tpl?.default_cluster) form.setData('cluster_zone', tpl.default_cluster);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.template_id]);
 
   function handleTemplateChange(e: React.ChangeEvent<HTMLSelectElement>) {
     form.setData('template_id', e.target.value);
@@ -437,7 +451,10 @@ export default function DocumentEdit({
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
                 <select
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
+                  onChange={(e) => {
+                    setClusterEditedManually(true);
+                    form.setData('cluster_zone', e.target.value);
+                  }}
                   className={is_rejected_revision ? lockedInputCls : inputCls}
                   disabled={is_rejected_revision}
                 >

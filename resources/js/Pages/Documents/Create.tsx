@@ -77,6 +77,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
   const [loadingLevels, setLoadingLevels] = useState(false);
   const [resolvedApprovers, setResolvedApprovers] = useState<ResolvedApprover[]>([]);
   const [resolving, setResolving] = useState(false);
+  const [clusterEditedManually, setClusterEditedManually] = useState(false);
 
   const form = useForm<{
     unique_id: string;
@@ -142,6 +143,15 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
       .finally(() => setResolving(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id, form.data.cluster_zone, is_admin_submit]);
+
+  // Sync Cluster Zone to the selected template's default cluster whenever the
+  // template changes — unless the admin has already edited Cluster Zone manually.
+  useEffect(() => {
+    if (clusterEditedManually || !form.data.template_id) return;
+    const tpl = templates.find((t) => t.id === form.data.template_id);
+    if (tpl?.default_cluster) form.setData('cluster_zone', tpl.default_cluster);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.template_id]);
 
   function handleTemplateChange(e: React.ChangeEvent<HTMLSelectElement>) {
     form.setData('template_id', e.target.value);
@@ -293,7 +303,10 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
               <Field label={t('documents_create.field_cluster_zone')} required error={form.errors.cluster_zone}>
                 <select
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
+                  onChange={(e) => {
+                    setClusterEditedManually(true);
+                    form.setData('cluster_zone', e.target.value);
+                  }}
                   className={inputCls}
                 >
                   <option value="">{t('documents_create.placeholder_cluster_zone')}</option>

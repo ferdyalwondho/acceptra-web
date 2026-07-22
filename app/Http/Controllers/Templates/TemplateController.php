@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Templates;
 
 use App\Http\Controllers\Controller;
+use App\Models\Cluster;
 use App\Models\Template;
 use App\Models\TemplateLevel;
 use Illuminate\Http\JsonResponse;
@@ -91,6 +92,7 @@ class TemplateController extends Controller
 
         return Inertia::render('Templates/Create', [
             'available_roles' => self::AVAILABLE_ROLES,
+            'clusters'        => Cluster::where('status', 'active')->orderBy('name')->get(['id', 'name', 'province', 'display_name']),
         ]);
     }
 
@@ -103,6 +105,7 @@ class TemplateController extends Controller
             'name'                        => ['required', 'string', 'max:200'],
             'sow_code'                    => ['nullable', 'string', 'max:50'],
             'description'                 => ['nullable', 'string'],
+            'default_cluster_id'          => ['nullable', 'uuid', 'exists:clusters,id'],
             'levels'                      => ['required', 'array', 'min:1', 'max:3'],
             'levels.*.role'               => ['required', 'string', 'in:approver_ms_bo,approver_ms_bo_team,approver_ms_rts,approver_xls_rth_team,approver_xls_rth,approver_sme'],
             'levels.*.requires_signature' => ['required', 'boolean'],
@@ -117,10 +120,11 @@ class TemplateController extends Controller
         ]);
 
         $template = Template::create([
-            'name'        => $validated['name'],
-            'sow_code'    => $validated['sow_code'] ?? null,
-            'description' => $validated['description'] ?? null,
-            'status'      => 'active',
+            'name'               => $validated['name'],
+            'sow_code'           => $validated['sow_code'] ?? null,
+            'description'        => $validated['description'] ?? null,
+            'default_cluster_id' => $validated['default_cluster_id'] ?? null,
+            'status'             => 'active',
         ]);
 
         $this->saveLevels($template, $validated['levels']);
@@ -148,14 +152,16 @@ class TemplateController extends Controller
 
         return Inertia::render('Templates/Edit', [
             'template' => [
-                'id'          => $template->id,
-                'name'        => $template->name,
-                'sow_code'    => $template->sow_code,
-                'description' => $template->description,
-                'status'      => $template->status,
-                'levels'      => $userLevels,
+                'id'                  => $template->id,
+                'name'                => $template->name,
+                'sow_code'            => $template->sow_code,
+                'description'         => $template->description,
+                'status'              => $template->status,
+                'default_cluster_id'  => $template->default_cluster_id,
+                'levels'              => $userLevels,
             ],
             'available_roles' => self::AVAILABLE_ROLES,
+            'clusters'        => Cluster::where('status', 'active')->orderBy('name')->get(['id', 'name', 'province', 'display_name']),
         ]);
     }
 
@@ -170,6 +176,7 @@ class TemplateController extends Controller
             'name'                        => ['required', 'string', 'max:200'],
             'sow_code'                    => ['nullable', 'string', 'max:50'],
             'description'                 => ['nullable', 'string'],
+            'default_cluster_id'          => ['nullable', 'uuid', 'exists:clusters,id'],
             'status'                      => ['required', 'in:active,inactive'],
             'levels'                      => ['required', 'array', 'min:1', 'max:3'],
             'levels.*.role'               => ['required', 'string', 'in:approver_ms_bo,approver_ms_bo_team,approver_ms_rts,approver_xls_rth_team,approver_xls_rth,approver_sme'],
@@ -187,10 +194,11 @@ class TemplateController extends Controller
         ]);
 
         $template->update([
-            'name'        => $validated['name'],
-            'sow_code'    => $validated['sow_code'] ?? null,
-            'description' => $validated['description'] ?? null,
-            'status'      => $validated['status'],
+            'name'               => $validated['name'],
+            'sow_code'           => $validated['sow_code'] ?? null,
+            'description'        => $validated['description'] ?? null,
+            'default_cluster_id' => $validated['default_cluster_id'] ?? null,
+            'status'             => $validated['status'],
         ]);
 
         // Hapus level lama, insert level baru (dokumen berjalan pakai snapshot — FR-TPL-06)
@@ -233,10 +241,11 @@ class TemplateController extends Controller
         $source = Template::with('levels')->findOrFail($id);
 
         $clone = Template::create([
-            'name'        => 'Copy of ' . $source->name,
-            'sow_code'    => $source->sow_code,
-            'description' => $source->description,
-            'status'      => 'inactive',
+            'name'               => 'Copy of ' . $source->name,
+            'sow_code'           => $source->sow_code,
+            'description'        => $source->description,
+            'default_cluster_id' => $source->default_cluster_id,
+            'status'             => 'inactive',
         ]);
 
         foreach ($source->levels as $level) {

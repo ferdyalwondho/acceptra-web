@@ -17,6 +17,7 @@ class Template extends Model
         'sow_code',
         'description',
         'status',
+        'default_cluster_id',
     ];
 
     public function newUniqueId(): string
@@ -27,5 +28,10 @@ class Template extends Model
     public function levels(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(TemplateLevel::class)->orderBy('level_order');
+    }
+
+    public function defaultCluster(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Cluster::class, 'default_cluster_id');
     }
 }

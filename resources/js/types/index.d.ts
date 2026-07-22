@@ -133,6 +133,7 @@ export interface TemplateDetail {
   sow_code: string | null;
   description: string | null;
   status: 'active' | 'inactive';
+  default_cluster_id: string | null;
   levels: TemplateLevelRecord[];
 }
 
@@ -148,6 +149,7 @@ export interface TemplateOption {
   name: string;
   sow_code: string | null;
   levels_count: number;
+  default_cluster: string | null;
 }
 
 export interface TemplateLevelOption {
@@ -225,6 +227,16 @@ export interface AdminMetrics {
   need_revision: number;
   completed: number;
   overdue_count: number;
+}
+
+// Per-approval-step status breakdown — shared by Dashboard/Admin (global) and
+// Dashboard/Approver (scoped to the logged-in approver).
+export interface ApprovalStatusCounts {
+  pending: number;
+  approved: number;
+  punchlist_pending: number;
+  rejected_pending: number;
+  atp_done: number;
 }
 
 export interface ActiveDoc {

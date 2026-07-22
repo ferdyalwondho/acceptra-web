@@ -100,14 +100,15 @@ class DocumentController extends Controller
         abort_if(! in_array($user->role, self::SUBMIT_ROLES), 403);
 
         $templates = Template::where('status', 'active')
-            ->with('levels')
+            ->with(['levels', 'defaultCluster'])
             ->orderBy('name')
             ->get()
             ->map(fn (Template $t) => [
-                'id'           => $t->id,
-                'name'         => $t->name,
-                'sow_code'     => $t->sow_code,
-                'levels_count' => $t->levels->count(),
+                'id'              => $t->id,
+                'name'            => $t->name,
+                'sow_code'        => $t->sow_code,
+                'levels_count'    => $t->levels->count(),
+                'default_cluster' => $t->defaultCluster?->display_name,
             ]);
 
         $props = [
@@ -275,14 +276,15 @@ class DocumentController extends Controller
         }
 
         $templates = Template::where('status', 'active')
-            ->with('levels')
+            ->with(['levels', 'defaultCluster'])
             ->orderBy('name')
             ->get()
             ->map(fn (Template $t) => [
-                'id'           => $t->id,
-                'name'         => $t->name,
-                'sow_code'     => $t->sow_code,
-                'levels_count' => $t->levels->count(),
+                'id'              => $t->id,
+                'name'            => $t->name,
+                'sow_code'        => $t->sow_code,
+                'levels_count'    => $t->levels->count(),
+                'default_cluster' => $t->defaultCluster?->display_name,
             ]);
 
         $props = [
@@ -779,24 +781,18 @@ class DocumentController extends Controller
                 ->with('status', 'Draft saved.');
         }
 
-        // For rejected documents, determine which level to resume from.
+        // For rejected documents, record which level rejected it (for audit/status-code
+        // flavor only — the approval chain itself always restarts from L1 regardless).
         // Rejection codes follow level_order * 3 - 1 (02=L1, 05=L2, 08=L3, 11=L4).
         $rejectionLevel = null;
         if ($isRejected) {
             $rejectionLevel = (int) (((int) ltrim($document->status_code, '0') + 1) / 3);
         }
 
-        // A Partner-submitted revision of a rejected document must be reviewed (and its
-        // signature placement redone) by an Admin before the rejected level is reactivated —
-        // placement is Admin-only, so the Partner can no longer do that step themselves.
-        // An Admin revising their own rejected document still resumes immediately, unchanged.
-        $deferActivation = $isRejected && ! $isAdmin;
-
         return $this->finalizeSubmission(
             $document, $validated, $user, $isAdmin,
             $isRejected, $rejectionLevel,
             $pdfPath, $previousPdfPath, $pdfChanged, $templateChanged,
-            $deferActivation,
         );
     }
 
@@ -863,16 +859,10 @@ class DocumentController extends Controller
         ?string $previousPdfPath,
         bool $pdfChanged,
         bool $templateChanged,
-        bool $deferActivation = false,
     ): RedirectResponse {
         $nextActiveStep = null;
 
-        // A Partner's revision must pass through the L1 (Admin) gate again before the
-        // originally-rejected level reactivates — unless L1 itself was the rejecting level,
-        // in which case there's no separate gate to insert and it resumes immediately.
-        $isDeferredToL1Gate = $deferActivation && $rejectionLevel !== null && $rejectionLevel > 1;
-
-        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, $isDeferredToL1Gate, &$nextActiveStep) {
+        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, &$nextActiveStep) {
             $template = Template::with('levels')->findOrFail($validated['template_id']);
 
             // Placement only needs to be redone if the PDF or the approval template changed;
@@ -912,28 +902,13 @@ class DocumentController extends Controller
 
             $document->update($updateData);
 
-            // Rebuild approval steps.
-            // When resuming from a rejection level, levels before it are auto-approved
-            // so the flow continues from where it was rejected.
-            // Capture the outgoing steps first — levels re-carried as auto-approved must
-            // keep their original signature/timestamp, or the visual signature stamp on
-            // the generated PDF silently disappears for approvals made before the rejection.
-            $previousSteps = $document->approvalSteps()->get()->keyBy('level_order');
-
+            // Rebuild approval steps from scratch. BR: a rejection anywhere in the chain
+            // restarts the WHOLE approval flow from L1 — no level is auto-carried as
+            // already-approved, every approver must review the revised document themselves,
+            // whether the rejection happened at L1 or L4.
             $document->approvalSteps()->delete();
             foreach ($template->levels as $level) {
                 $n = $level->level_order;
-
-                // L1 must review the revision again before the rejected level resumes —
-                // it is not carried over as auto-approved in that case.
-                $autoApproved = $rejectionLevel !== null && $n < $rejectionLevel
-                    && ! ($isDeferredToL1Gate && $n === 1);
-
-                $isActive = $isDeferredToL1Gate
-                    ? $n === 1
-                    : ($rejectionLevel !== null ? $n === $rejectionLevel : $n === 1);
-
-                $previous = $previousSteps->get($n);
 
                 ApprovalStep::create([
                     'document_id'        => $document->id,
@@ -941,51 +916,25 @@ class DocumentController extends Controller
                     'role'               => $level->role,
                     'requires_signature' => $level->requires_signature,
                     'approver_id'        => $n === 1 ? null : ($pics[$n] ?? null),
-                    'status'             => $autoApproved ? ($previous->status ?? 'approved') : 'pending',
-                    'action_at'          => $autoApproved ? ($previous->action_at ?? now()) : null,
-                    'signature_id'       => $autoApproved ? $previous?->signature_id : null,
-                    'punchlist_notes'    => $autoApproved ? $previous?->punchlist_notes : null,
-                    'is_active'          => $isActive,
+                    'status'             => 'pending',
+                    'is_active'          => false,
                 ]);
             }
 
             AuditService::log(
                 $document->id,
                 'document.submitted',
-                "Draft submitted by {$user->name}",
-                [],
+                $rejectionLevel !== null
+                    ? "Revision resubmitted by {$user->name}. Previously rejected at L{$rejectionLevel} — full approval restarts from L1."
+                    : "Draft submitted by {$user->name}",
+                $rejectionLevel !== null ? ['previously_rejected_level' => $rejectionLevel] : [],
                 $user->id,
             );
 
-            if ($rejectionLevel !== null) {
-                if ($isDeferredToL1Gate) {
-                    // Partner-submitted revision: goes back through L1 review, exactly
-                    // like a fresh submission — the rejected level only reactivates once
-                    // Admin approves this L1 gate and redoes signature placement.
-                    $document->update(['status_code' => '01']);
-                } else {
-                    // Resume from the rejected level. Rejection codes are level*3-1, so the
-                    // "Done Rectification - On Review Ln" code that follows is level*3
-                    // (e.g. L3 rejected = '08', revised/resuming = '09').
-                    $pendingCode = str_pad($rejectionLevel * 3, 2, '0', STR_PAD_LEFT);
-                    $document->update(['status_code' => $pendingCode]);
-                }
-
-                $nextActiveStep = ApprovalStep::where('document_id', $document->id)
-                    ->where('level_order', $isDeferredToL1Gate ? 1 : $rejectionLevel)
-                    ->first();
-
-                AuditService::log(
-                    $document->id,
-                    'document.revision_resubmitted',
-                    $isDeferredToL1Gate
-                        ? "Revision resubmitted by {$user->name}. Awaiting Admin (L1) review before resuming L{$rejectionLevel}."
-                        : "Revision resubmitted by {$user->name}. Resuming from L{$rejectionLevel}.",
-                    ['resumed_from_level' => $rejectionLevel],
-                    $user->id,
-                );
-            } elseif ($isAdmin) {
-                // Normal admin submit — auto-approve L1 and activate L2.
+            if ($isAdmin) {
+                // Admin submit/resubmit: auto-approve L1, activate L2. Status code uses the
+                // "Done Rectification" flavor ('06') when restarting after a rejection,
+                // otherwise the first-time code ('04').
                 ApprovalStep::where('document_id', $document->id)
                     ->where('level_order', 1)
                     ->update(['status' => 'approved', 'action_at' => now(), 'is_active' => false]);
@@ -998,7 +947,7 @@ class DocumentController extends Controller
                     $nextActiveStep->update(['is_active' => true]);
                 }
 
-                $document->update(['status_code' => '04']);
+                $document->update(['status_code' => $rejectionLevel !== null ? '06' : '04']);
 
                 AuditService::log(
                     $document->id,
@@ -1007,21 +956,22 @@ class DocumentController extends Controller
                     ['level' => 1],
                     null,
                 );
+            } else {
+                // Partner submit/resubmit: L1 must genuinely review it — same L1 gate whether
+                // this is a first-time submission or a restart after a rejection at any level.
+                ApprovalStep::where('document_id', $document->id)
+                    ->where('level_order', 1)
+                    ->update(['is_active' => true]);
+
+                $nextActiveStep = ApprovalStep::where('document_id', $document->id)
+                    ->where('level_order', 1)
+                    ->first();
+
+                $document->update(['status_code' => $rejectionLevel !== null ? '03' : '01']);
             }
         });
 
-        if ($rejectionLevel !== null) {
-            if ($isDeferredToL1Gate) {
-                // Reuse the exact same "new submission" notification Admin already gets
-                // for a fresh document — this revision needs an L1 check again, and this
-                // also makes it appear in the Approvals queue via the reactivated L1 step.
-                NotifyAdminsJob::dispatch($document->fresh(), 'submission');
-            } elseif ($nextActiveStep) {
-                // Admin-submitted revision (or one resuming L1 itself) proceeds
-                // immediately — notify the approver.
-                NotifyApproverTurnJob::dispatch($document->fresh(), $nextActiveStep);
-            }
-        } elseif ($isAdmin) {
+        if ($isAdmin) {
             NotifyAdminsJob::dispatch($document, 'approved');
             if ($nextActiveStep) {
                 NotifyApproverTurnJob::dispatch($document->fresh(), $nextActiveStep);
@@ -1031,10 +981,10 @@ class DocumentController extends Controller
         }
 
         $flash = match (true) {
-            $isDeferredToL1Gate       => 'Revision submitted. Waiting for Admin (L1) review before approval resumes.',
-            $rejectionLevel !== null  => "Revision resubmitted. Resumed from L{$rejectionLevel} approval.",
-            $isAdmin                  => 'Document submitted and L1 auto-approved.',
-            default                   => 'Document submitted successfully.',
+            $rejectionLevel !== null && $isAdmin => 'Revision resubmitted. L1 auto-approved — full approval restarts from L2.',
+            $rejectionLevel !== null             => 'Revision resubmitted. Waiting for Admin (L1) review — full approval restarts from L1.',
+            $isAdmin                              => 'Document submitted and L1 auto-approved.',
+            default                                => 'Document submitted successfully.',
         };
 
         return redirect()->route('documents.show', $document->id)
@@ -1047,14 +997,15 @@ class DocumentController extends Controller
         abort_if(! in_array($request->user()->role, self::ADMIN_ROLES), 403);
 
         $templates = Template::where('status', 'active')
-            ->with('levels')
+            ->with(['levels', 'defaultCluster'])
             ->orderBy('name')
             ->get()
             ->map(fn (Template $t) => [
-                'id'           => $t->id,
-                'name'         => $t->name,
-                'sow_code'     => $t->sow_code,
-                'levels_count' => $t->levels->count(),
+                'id'              => $t->id,
+                'name'            => $t->name,
+                'sow_code'        => $t->sow_code,
+                'levels_count'    => $t->levels->count(),
+                'default_cluster' => $t->defaultCluster?->display_name,
             ]);
 
         $partners = Partner::where('status', 'active')
