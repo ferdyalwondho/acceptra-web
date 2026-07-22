@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import AppShell from '@/layouts/AppShell';
 import { ArrowLeft, Plus, Trash2, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { AvailableRole } from '@/types';
+import type { AvailableRole, ClusterOption } from '@/types';
 
 interface LevelRow {
   role: string;
@@ -15,11 +15,13 @@ interface FormData {
   name: string;
   sow_code: string;
   description: string;
+  default_cluster_id: string;
   levels: LevelRow[];
 }
 
 interface Props {
   available_roles: AvailableRole[];
+  clusters: ClusterOption[];
 }
 
 const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors';
@@ -27,14 +29,15 @@ const errorCls = 'mt-1 text-xs text-danger';
 
 const APPROVE_ONLY_ROLES = ['approver_ms_bo_team'];
 
-export default function TemplateCreate({ available_roles }: Props) {
+export default function TemplateCreate({ available_roles, clusters }: Props) {
   const { t } = useTranslation();
 
   const form = useForm<FormData>({
-    name:        '',
-    sow_code:    '',
-    description: '',
-    levels:      [{ role: '', requires_signature: false }],
+    name:                '',
+    sow_code:            '',
+    description:         '',
+    default_cluster_id:  '',
+    levels:              [{ role: '', requires_signature: false }],
   });
 
   function addLevel() {
@@ -132,6 +135,26 @@ export default function TemplateCreate({ available_roles }: Props) {
                   placeholder={t('template_form.description_placeholder')}
                   className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors"
                 />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                  {t('template_form.field_default_cluster')}
+                </label>
+                <select
+                  value={form.data.default_cluster_id}
+                  onChange={(e) => form.setData('default_cluster_id', e.target.value)}
+                  className={cn(inputCls, form.errors.default_cluster_id && 'border-danger')}
+                >
+                  <option value="">{t('template_form.default_cluster_placeholder')}</option>
+                  {clusters.map((c) => (
+                    <option key={c.id} value={c.id}>{c.display_name}</option>
+                  ))}
+                </select>
+                {form.errors.default_cluster_id && <p className={errorCls}>{form.errors.default_cluster_id}</p>}
+                <p className="mt-1.5 text-xs text-[var(--color-text-tertiary)]">
+                  {t('template_form.default_cluster_hint')}
+                </p>
               </div>
             </div>
           </div>

@@ -29,6 +29,13 @@ interface Props extends PageProps {
   defaults: { vendor_contractor: string };
 }
 
+interface ResolvedApprover {
+  level_order: number;
+  role: string;
+  role_label: string;
+  approver: { id: string; name: string } | null;
+}
+
 const inputCls =
   'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] transition-colors duration-[120ms] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40';
 
@@ -110,6 +117,8 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
   const [templateLevels, setTemplateLevels] = useState<TemplateLevelOption[]>([]);
   const [approvers, setApprovers]           = useState<Record<string, Array<{ id: string; name: string }>>>({});
   const [loadingLevels, setLoadingLevels]   = useState(false);
+  const [resolvedApprovers, setResolvedApprovers] = useState<ResolvedApprover[]>([]);
+  const [clusterEditedManually, setClusterEditedManually] = useState(false);
 
   const form = useForm<{
     unique_id: string;
@@ -185,6 +194,56 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id]);
 
+  // Resolve cluster PICs per level once both cluster and template are picked — same
+  // /api/clusters/resolve call used by Create.tsx / Edit.tsx — so offline/pending
+  // approver fields below can be pre-filled instead of typed/picked from scratch.
+  useEffect(() => {
+    if (!form.data.template_id || !form.data.cluster_zone) {
+      setResolvedApprovers([]);
+      return;
+    }
+
+    axios
+      .get<{ data: ResolvedApprover[] }>('/api/clusters/resolve', {
+        params: { cluster: form.data.cluster_zone, template_id: form.data.template_id },
+      })
+      .then(({ data }) => setResolvedApprovers(data.data))
+      .catch(() => setResolvedApprovers([]));
+  }, [form.data.template_id, form.data.cluster_zone]);
+
+  // Backfill approver fields once resolvedApprovers arrives, for levels whose
+  // status was already toggled before the resolve call finished — never
+  // overwrites a value the admin already typed/picked.
+  useEffect(() => {
+    if (resolvedApprovers.length === 0) return;
+    const byLevel = new Map(resolvedApprovers.map((r) => [r.level_order, r.approver]));
+    let changed = false;
+    const updated = form.data.levels.map((l) => {
+      const approver = byLevel.get(l.level_order);
+      if (!approver) return l;
+      if (!l.is_offline && !l.approver_id) {
+        changed = true;
+        return { ...l, approver_id: approver.id };
+      }
+      if (l.is_offline && !l.approver_name) {
+        changed = true;
+        return { ...l, approver_name: approver.name.toUpperCase() };
+      }
+      return l;
+    });
+    if (changed) form.setData('levels', updated);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedApprovers]);
+
+  // Sync Cluster Zone to the selected template's default cluster whenever the
+  // template changes — unless the admin has already edited Cluster Zone manually.
+  useEffect(() => {
+    if (clusterEditedManually || !form.data.template_id) return;
+    const tpl = templates.find((t) => t.id === form.data.template_id);
+    if (tpl?.default_cluster) form.setData('cluster_zone', tpl.default_cluster);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.template_id]);
+
   // Update a single field on a level
   function updateLevel(idx: number, patch: Partial<OfflineLevel>) {
     const updated = form.data.levels.map((l, i) => (i === idx ? { ...l, ...patch } : l));
@@ -194,12 +253,26 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
   // Toggle offline/pending, enforcing no-gap rule with cascade
   function toggleLevel(idx: number, makeOffline: boolean) {
     if (idx === 0) return; // L1 is always offline — immutable
+    const byLevel = new Map(resolvedApprovers.map((r) => [r.level_order, r.approver]));
+
+    // Only fills the field when it's still empty — never clobbers a value the
+    // admin already typed/picked (e.g. re-toggling a level back and forth).
+    function applyResolved(l: OfflineLevel, offline: boolean): OfflineLevel {
+      const approver = byLevel.get(l.level_order);
+      if (offline) {
+        const approver_name = !l.approver_name && approver ? approver.name.toUpperCase() : l.approver_name;
+        return { ...l, is_offline: true, approver_name };
+      }
+      const approver_id = !l.approver_id && approver ? approver.id : l.approver_id;
+      return { ...l, is_offline: false, approver_id };
+    }
+
     const updated = form.data.levels.map((l, i) => {
-      if (i === idx) return { ...l, is_offline: makeOffline };
+      if (i === idx) return applyResolved(l, makeOffline);
       // cascade: making a level pending forces all levels below to pending
-      if (!makeOffline && i > idx) return { ...l, is_offline: false };
+      if (!makeOffline && i > idx) return applyResolved(l, false);
       // cascade: making a level offline forces all levels above to offline
-      if (makeOffline && i < idx) return { ...l, is_offline: true };
+      if (makeOffline && i < idx) return applyResolved(l, true);
       return l;
     });
     form.setData('levels', updated);
@@ -378,7 +451,10 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
                 <select
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
+                  onChange={(e) => {
+                    setClusterEditedManually(true);
+                    form.setData('cluster_zone', e.target.value);
+                  }}
                   className={inputCls}
                 >
                   <option value="">-- Pilih cluster --</option>

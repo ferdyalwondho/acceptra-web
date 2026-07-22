@@ -365,23 +365,20 @@ class ApprovalController extends Controller
                 $document->update(['status_code' => '14', 'routing_pending' => true]);
                 $routingPendingTriggered = true;
             } elseif ($nextStep) {
-                // Resuming a level that was previously rejected-then-revised (Partner went
-                // through the L1 re-review gate) uses the "Done Rectification" code for that
-                // level; otherwise it's this level's normal first-time "on review" code.
-                // Based on $nextStep's own level (not $activeStep's) — these coincide for the
-                // ordinary sequential case, but diverge when $nextStep is several levels ahead
-                // of $activeStep (levels in between were auto-approved before a rejection).
-                $isResumingRejectedLevel = $document->previous_pdf_rejected_level === $nextStep->level_order;
-                $advanceCode = $isResumingRejectedLevel
+                // The whole chain restarts from L1 after any rejection (BR: reject never
+                // resumes mid-chain), so every level reached during that restart is a
+                // "Done Rectification" re-review, not a first-time look — regardless of
+                // which specific level originally rejected it.
+                $isRectificationCycle = $document->previous_pdf_rejected_level !== null;
+                $advanceCode = $isRectificationCycle
                     ? str_pad($nextStep->level_order * 3, 2, '0', STR_PAD_LEFT)
                     : str_pad(($nextStep->level_order - 1) * 3 + 1, 2, '0', STR_PAD_LEFT);
 
-                // Approvers are already known (resuming after a revision) but the signature
-                // placement still needs to be redone for the new PDF before this level can go
-                // live — route through the same routing_pending/RoutingPanel flow used when
-                // PICs aren't assigned yet.
-                $needsPlacementRedo = $isResumingRejectedLevel
-                    && ($document->template_snapshot['placement']['status'] ?? 'pending') !== 'manual';
+                // Signature placement is a per-PDF (not per-level) concern — redo it the first
+                // time any step tries to go active after the PDF changed, regardless of which
+                // level that is; once Admin completes routing this stays clear for the rest of
+                // the chain in the same cycle.
+                $needsPlacementRedo = ($document->template_snapshot['placement']['status'] ?? 'pending') !== 'manual';
 
                 if ($nextStep->approver_id === null) {
                     // Partner-submitted document reaching the next level for the first time —
