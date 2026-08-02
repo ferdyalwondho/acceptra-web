@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Head, Link, useForm } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import SearchableSelect from '@/components/acceptra/SearchableSelect';
 import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
@@ -189,8 +190,8 @@ export default function DocumentEdit({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id]);
 
-  function handleTemplateChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    form.setData('template_id', e.target.value);
+  function handleTemplateChange(templateId: string) {
+    form.setData('template_id', templateId);
   }
 
   function submit(draft: boolean) {
@@ -367,17 +368,14 @@ export default function DocumentEdit({
             {is_admin_submit && (
               <div className="sm:col-span-2">
                 <Field label="Partner / Subkontraktor" required error={form.errors.partner_id}>
-                  <select
+                  <SearchableSelect
+                    options={(partners ?? []).map((p) => ({ value: p.id, label: p.name }))}
                     value={form.data.partner_id}
-                    onChange={(e) => form.setData('partner_id', e.target.value)}
-                    className={is_rejected_revision ? lockedInputCls : inputCls}
+                    onChange={(v) => form.setData('partner_id', v)}
+                    placeholder="-- Pilih partner --"
                     disabled={is_rejected_revision}
-                  >
-                    <option value="">-- Pilih partner --</option>
-                    {(partners ?? []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                    hasError={!!form.errors.partner_id}
+                  />
                 </Field>
               </div>
             )}
@@ -449,20 +447,17 @@ export default function DocumentEdit({
 
             <div className="sm:col-span-2">
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
-                <select
+                <SearchableSelect
+                  options={clusters.map((c) => ({ value: c.display_name, label: c.display_name, sublabel: c.province }))}
                   value={form.data.cluster_zone}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setClusterEditedManually(true);
-                    form.setData('cluster_zone', e.target.value);
+                    form.setData('cluster_zone', v);
                   }}
-                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  placeholder="-- Pilih cluster --"
                   disabled={is_rejected_revision}
-                >
-                  <option value="">-- Pilih cluster --</option>
-                  {clusters.map((c) => (
-                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
-                  ))}
-                </select>
+                  hasError={!!form.errors.cluster_zone}
+                />
               </Field>
             </div>
           </div>
@@ -471,19 +466,17 @@ export default function DocumentEdit({
         {/* ─── 2. SOW Template ─── */}
         <Section step={2} title="SOW & Alur Approval" done={!!form.data.template_id}>
           <Field label="Template / SOW" required error={form.errors.template_id}>
-            <select
+            <SearchableSelect
+              options={templates.map((t) => ({
+                value: t.id,
+                label: `${t.name}${t.sow_code ? ` (${t.sow_code})` : ''}`,
+              }))}
               value={form.data.template_id}
               onChange={handleTemplateChange}
-              className={is_rejected_revision ? lockedInputCls : inputCls}
+              placeholder="-- Pilih template SOW --"
               disabled={loadingLevels || is_rejected_revision}
-            >
-              <option value="">-- Pilih template SOW --</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}{t.sow_code ? ` (${t.sow_code})` : ''}
-                </option>
-              ))}
-            </select>
+              hasError={!!form.errors.template_id}
+            />
           </Field>
 
           {levels.length > 0 && (
