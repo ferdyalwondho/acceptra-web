@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Head, Link, useForm } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import SearchableSelect from '@/components/acceptra/SearchableSelect';
 import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import {
@@ -370,16 +371,13 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
             {/* Partner */}
             <div className="sm:col-span-2">
               <Field label="Partner / Subkontraktor" required error={form.errors.partner_id}>
-                <select
+                <SearchableSelect
+                  options={partners.map((p) => ({ value: p.id, label: p.name }))}
                   value={form.data.partner_id}
-                  onChange={(e) => form.setData('partner_id', e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="">-- Pilih partner --</option>
-                  {partners.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
+                  onChange={(v) => form.setData('partner_id', v)}
+                  placeholder="-- Pilih partner --"
+                  hasError={!!form.errors.partner_id}
+                />
               </Field>
             </div>
 
@@ -449,19 +447,16 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
             {/* Cluster Zone */}
             <div className="sm:col-span-2">
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
-                <select
+                <SearchableSelect
+                  options={clusters.map((c) => ({ value: c.display_name, label: c.display_name, sublabel: c.province }))}
                   value={form.data.cluster_zone}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setClusterEditedManually(true);
-                    form.setData('cluster_zone', e.target.value);
+                    form.setData('cluster_zone', v);
                   }}
-                  className={inputCls}
-                >
-                  <option value="">-- Pilih cluster --</option>
-                  {clusters.map((c) => (
-                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
-                  ))}
-                </select>
+                  placeholder="-- Pilih cluster --"
+                  hasError={!!form.errors.cluster_zone}
+                />
               </Field>
             </div>
           </div>
@@ -470,20 +465,17 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
         {/* ─── 2. Template / SOW ─── */}
         <Section step={2} title="Template / SOW" done={templateDone}>
           <Field label="SOW Template" required error={form.errors.template_id}>
-            <select
+            <SearchableSelect
+              options={templates.map((t) => ({
+                value: t.id,
+                label: `${t.name}${t.sow_code ? ` (${t.sow_code})` : ''}`,
+              }))}
               value={form.data.template_id}
-              onChange={(e) => form.setData('template_id', e.target.value)}
-              className={inputCls}
+              onChange={(v) => form.setData('template_id', v)}
+              placeholder="-- Pilih template --"
               disabled={loadingLevels}
-            >
-              <option value="">-- Pilih template --</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                  {t.sow_code ? ` (${t.sow_code})` : ''}
-                </option>
-              ))}
-            </select>
+              hasError={!!form.errors.template_id}
+            />
           </Field>
           {loadingLevels && (
             <p className="mt-2 text-xs text-[var(--color-text-secondary)]">Memuat level approval…</p>

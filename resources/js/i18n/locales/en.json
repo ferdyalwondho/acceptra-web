@@ -775,5 +775,8 @@
     "search_placeholder": "Search cluster or province…",
     "no_results": "No matching clusters.",
     "selected_count": "{{count}} cluster selected"
+  },
+  "searchable_select": {
+    "no_results": "No matching results."
   }
 }

@@ -774,5 +774,8 @@
     "search_placeholder": "Cari cluster atau province…",
     "no_results": "Tidak ada cluster yang cocok.",
     "selected_count": "{{count}} cluster dipilih"
+  },
+  "searchable_select": {
+    "no_results": "Tidak ada hasil yang cocok."
   }
 }
