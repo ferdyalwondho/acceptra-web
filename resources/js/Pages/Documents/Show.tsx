@@ -733,16 +733,14 @@ function SubmitApprovalModal({ submitting, onCancel, onConfirm }: { submitting: 
 /* ── Delete Document Confirm Modal ──────────────────────────────────────── */
 
 function DeleteDocumentModal({
-  uniqueId, submitting, onCancel, onConfirm,
+  submitting, onCancel, onConfirm,
 }: {
-  uniqueId: string;
   submitting: boolean;
   onCancel: () => void;
-  onConfirm: (confirmText: string) => void;
+  onConfirm: (reason: string) => void;
 }) {
   const { t } = useTranslation();
-  const [typedText, setTypedText] = useState('');
-  const matches = typedText === uniqueId;
+  const [reason, setReason] = useState('');
 
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
@@ -755,14 +753,14 @@ function DeleteDocumentModal({
         <p className="text-sm text-[var(--color-text-secondary)]">{t('documents.show.delete_warning')}</p>
         <div className="mt-4">
           <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
-            {t('documents.show.delete_confirm_label', { uniqueId })}
+            {t('documents.show.delete_reason_label')} <span className="text-danger">*</span>
           </label>
-          <input
-            type="text"
-            value={typedText}
-            onChange={(e) => setTypedText(e.target.value)}
-            placeholder={uniqueId}
-            className="h-9 w-full rounded-sm border border-danger/40 bg-white px-3 font-mono text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+          <textarea
+            rows={3}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={t('documents.show.delete_reason_placeholder') ?? undefined}
+            className="w-full resize-none rounded-sm border border-danger/40 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
           />
         </div>
         <div className="mt-6 flex justify-end gap-3">
@@ -770,8 +768,8 @@ function DeleteDocumentModal({
             {t('documents.show.btn_batal')}
           </button>
           <button
-            onClick={() => onConfirm(typedText)}
-            disabled={!matches || submitting}
+            onClick={() => onConfirm(reason)}
+            disabled={!reason.trim() || submitting}
             className="h-9 rounded-md bg-danger px-4 text-sm font-semibold text-white hover:bg-danger/90 disabled:opacity-50"
           >
             {submitting ? t('documents.show.deleting') : t('documents.show.delete_btn')}
@@ -952,11 +950,11 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     });
   };
 
-  const handleDeleteDocument = (confirmText: string) => {
+  const handleDeleteDocument = (reason: string) => {
     if (deletingDoc) return;
     setDeletingDoc(true);
     router.delete(`/documents/${doc.id}`, {
-      data: { confirm_text: confirmText },
+      data: { reason },
       onSuccess: () => router.visit('/documents'),
       onFinish:  () => setDeletingDoc(false),
     });
@@ -1439,7 +1437,6 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
       )}
       {showDeleteDocModal && (
         <DeleteDocumentModal
-          uniqueId={doc.unique_id}
           submitting={deletingDoc}
           onCancel={() => setShowDeleteDocModal(false)}
           onConfirm={handleDeleteDocument}
