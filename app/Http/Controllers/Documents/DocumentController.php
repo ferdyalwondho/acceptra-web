@@ -247,7 +247,7 @@ class DocumentController extends Controller
     public function destroy(Request $request, string $id): RedirectResponse
     {
         $user     = $request->user();
-        $document = Document::with('attachments')->findOrFail($id);
+        $document = Document::with(['attachments', 'approvalSteps', 'punchlistVerifications'])->findOrFail($id);
 
         abort_if($user->role !== 'super_admin', 403, 'Only Super Admin can delete a document.');
 
@@ -259,6 +259,8 @@ class DocumentController extends Controller
 
         $uniqueId = $document->unique_id;
         $filePaths = $document->attachments->pluck('file_path')
+            ->merge($document->approvalSteps->pluck('evidence_path'))
+            ->merge($document->punchlistVerifications->pluck('evidence_path'))
             ->merge([$document->original_pdf_path, $document->final_pdf_path, $document->previous_pdf_path])
             ->filter()
             ->unique();
