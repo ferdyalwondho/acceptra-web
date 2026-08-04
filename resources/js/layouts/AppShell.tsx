@@ -10,7 +10,7 @@ import type { PageProps } from '@/types';
 import {
   LayoutDashboard, FileText, GitBranch, Users, Inbox,
   History, Handshake, Settings, ChevronLeft, ChevronRight,
-  Globe, Menu, UserCircle, PenLine, LogOut, HelpCircle, MapPin,
+  Globe, Menu, UserCircle, PenLine, LogOut, HelpCircle, MapPin, Trash2,
 } from 'lucide-react';
 
 interface NavItem {
@@ -182,8 +182,15 @@ export default function AppShell({ children }: PropsWithChildren) {
         ))}
       </nav>
 
-      {/* Help — pinned above collapse toggle */}
-      <div className="border-t border-[var(--color-border)] px-2 py-2">
+      {/* Deleted Documents + Help — pinned above collapse toggle */}
+      <div className="border-t border-[var(--color-border)] px-2 py-2 space-y-0.5">
+        {['admin', 'super_admin'].includes(user.role) && (
+          <NavLink
+            item={{ label: t('nav.deleted_documents'), icon: <Trash2 className="h-4.5 w-4.5" />, href: '/documents/deleted' }}
+            collapsed={collapsed}
+            allItems={[]}
+          />
+        )}
         <NavLink
           item={{ label: t('nav.help'), icon: <HelpCircle className="h-4.5 w-4.5" />, href: '/help' }}
           collapsed={collapsed}
