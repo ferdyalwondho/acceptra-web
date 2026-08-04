@@ -10,6 +10,7 @@ use App\Services\AuditService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class PunchlistController extends Controller
 {
@@ -28,13 +29,22 @@ class PunchlistController extends Controller
         abort_if($myVerification->status !== 'pending', 422, 'You have already submitted your verification.');
 
         $request->validate([
-            'action' => ['required', 'in:verify,reject'],
-            'notes'  => ['required_if:action,reject', 'nullable', 'string'],
+            'action'        => ['required', 'in:verify,reject'],
+            'notes'         => ['required_if:action,reject', 'nullable', 'string'],
+            'evidence_file' => ['required_if:action,reject', 'nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
         ]);
 
         $action = $request->input('action');
 
-        DB::transaction(function () use ($user, $document, $myVerification, $action, $request) {
+        $evidencePath = null;
+        $evidenceName = null;
+        if ($request->hasFile('evidence_file')) {
+            $evidenceFile = $request->file('evidence_file');
+            $evidencePath = $evidenceFile->store('documents/approval-evidence');
+            $evidenceName = $evidenceFile->getClientOriginalName();
+        }
+
+        DB::transaction(function () use ($user, $document, $myVerification, $action, $request, $evidencePath, $evidenceName) {
             if ($action === 'verify') {
                 $myVerification->update([
                     'status'      => 'verified',
@@ -61,8 +71,10 @@ class PunchlistController extends Controller
                 }
             } else {
                 $myVerification->update([
-                    'status' => 'rejected',
-                    'notes'  => $request->input('notes'),
+                    'status'                      => 'rejected',
+                    'notes'                       => $request->input('notes'),
+                    'evidence_path'               => $evidencePath,
+                    'evidence_original_filename'  => $evidenceName,
                 ]);
 
                 $document->update(['status_code' => '14', 'final_pdf_path' => null]);
@@ -96,5 +108,25 @@ class PunchlistController extends Controller
         }
 
         return redirect()->route('approvals.index')->with('success', $flash);
+    }
+
+    // GET /documents/{id}/punchlist-verifications/{verificationId}/evidence
+    public function downloadEvidence(Request $request, string $id, string $verificationId)
+    {
+        $user         = $request->user();
+        $document     = Document::with('punchlistVerifications')->findOrFail($id);
+        $verification = $document->punchlistVerifications->firstWhere('id', $verificationId);
+
+        abort_if(! $verification, 404);
+
+        if ($user->role === 'partner') {
+            abort_if($document->submitted_by !== $user->id, 403);
+        } elseif (! in_array($user->role, ['admin', 'super_admin', 'viewer']) && $verification->approver_id !== $user->id) {
+            abort(403);
+        }
+
+        abort_if(! $verification->evidence_path || ! Storage::exists($verification->evidence_path), 404, 'Evidence file not found.');
+
+        return Storage::download($verification->evidence_path, $verification->evidence_original_filename ?? 'evidence');
     }
 }

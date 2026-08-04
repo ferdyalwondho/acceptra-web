@@ -81,6 +81,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/{id}',           [DocumentController::class, 'show'])->name('documents.show');
     Route::get('/documents/{id}/edit',      [DocumentController::class, 'edit'])->name('documents.edit');
     Route::put('/documents/{id}',           fn () => redirect()->back())->name('documents.update');
+    Route::delete('/documents/{id}',        [DocumentController::class, 'destroy'])->name('documents.destroy');
     Route::get('/documents/{id}/audit', function (string $id) {
         return redirect()->route('documents.show', ['id' => $id, 'tab' => 'audit-trail']);
     })->name('documents.audit');
@@ -137,6 +138,10 @@ Route::middleware('auth')->group(function () {
     Route::post('/documents/{id}/approve',  [ApprovalController::class, 'approve'])->name('approvals.approve');
     Route::post('/documents/{id}/reject',   [ApprovalController::class, 'reject'])->name('approvals.reject');
     Route::post('/documents/{id}/verify',   [PunchlistController::class, 'verify'])->name('approvals.verify');
+    Route::get('/documents/{id}/approval-steps/{stepId}/evidence',
+        [ApprovalController::class, 'downloadEvidence'])->name('approvals.evidence');
+    Route::get('/documents/{id}/punchlist-verifications/{verificationId}/evidence',
+        [PunchlistController::class, 'downloadEvidence'])->name('approvals.verification-evidence');
 
     /* ── Partners (FR-PTR) ── */
     Route::get('/partners',            [PartnerController::class, 'index'])->name('partners.index');

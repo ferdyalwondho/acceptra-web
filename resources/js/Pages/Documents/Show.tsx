@@ -730,6 +730,58 @@ function SubmitApprovalModal({ submitting, onCancel, onConfirm }: { submitting: 
   );
 }
 
+/* ── Delete Document Confirm Modal ──────────────────────────────────────── */
+
+function DeleteDocumentModal({
+  uniqueId, submitting, onCancel, onConfirm,
+}: {
+  uniqueId: string;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: (confirmText: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [typedText, setTypedText] = useState('');
+  const matches = typedText === uniqueId;
+
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onCancel} />
+      <div className="relative z-[410] w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+        <div className="mb-3 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-danger" />
+          <h2 className="font-semibold text-[var(--color-text-primary)]">{t('documents.show.delete_heading')}</h2>
+        </div>
+        <p className="text-sm text-[var(--color-text-secondary)]">{t('documents.show.delete_warning')}</p>
+        <div className="mt-4">
+          <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+            {t('documents.show.delete_confirm_label', { uniqueId })}
+          </label>
+          <input
+            type="text"
+            value={typedText}
+            onChange={(e) => setTypedText(e.target.value)}
+            placeholder={uniqueId}
+            className="h-9 w-full rounded-sm border border-danger/40 bg-white px-3 font-mono text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+          />
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button onClick={onCancel} className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]">
+            {t('documents.show.btn_batal')}
+          </button>
+          <button
+            onClick={() => onConfirm(typedText)}
+            disabled={!matches || submitting}
+            className="h-9 rounded-md bg-danger px-4 text-sm font-semibold text-white hover:bg-danger/90 disabled:opacity-50"
+          >
+            {submitting ? t('documents.show.deleting') : t('documents.show.delete_btn')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Audit Trail Tab ─────────────────────────────────────────────────────── */
 
 type AuditEventType = 'submit' | 'approve' | 'reject' | 'revise' | 'reassign' | 'generate' | 'draft';
@@ -851,8 +903,9 @@ function AuditTrailTab({ logs, documentId }: { logs: AuditLogEntry[]; documentId
 export default function DocumentShow({ document: doc, anchor_failed, pdf_url, excel_attachment, audit_logs, initial_tab }: Props) {
   const { auth, flash } = usePage<PageProps>().props;
   const { t } = useTranslation();
-  const isPartner = auth.user?.role === 'partner';
-  const isAdmin   = ['admin', 'super_admin'].includes(auth.user?.role ?? '');
+  const isPartner    = auth.user?.role === 'partner';
+  const isAdmin      = ['admin', 'super_admin'].includes(auth.user?.role ?? '');
+  const isSuperAdmin = auth.user?.role === 'super_admin';
 
   const [activeTab,          setActiveTab]          = useState(initial_tab ?? 'overview');
   const [showReassign,       setShowReassign]       = useState(false);
@@ -862,6 +915,8 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const [attachmentDeleted,  setAttachmentDeleted]  = useState(false);
   const [showSubmitConfirm,  setShowSubmitConfirm]  = useState(false);
   const [submittingApproval, setSubmittingApproval] = useState(false);
+  const [showDeleteDocModal, setShowDeleteDocModal] = useState(false);
+  const [deletingDoc,        setDeletingDoc]        = useState(false);
 
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -894,6 +949,16 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     router.post(`/documents/${doc.id}/submit`, {}, {
       onSuccess: () => setShowSubmitConfirm(false),
       onFinish:  () => setSubmittingApproval(false),
+    });
+  };
+
+  const handleDeleteDocument = (confirmText: string) => {
+    if (deletingDoc) return;
+    setDeletingDoc(true);
+    router.delete(`/documents/${doc.id}`, {
+      data: { confirm_text: confirmText },
+      onSuccess: () => router.visit('/documents'),
+      onFinish:  () => setDeletingDoc(false),
     });
   };
 
@@ -1140,22 +1205,49 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                         <AlertTriangle className="h-4 w-4 text-warning" />
                         <span className="text-sm font-semibold text-warning">{t('documents.show.punchlist_heading')}</span>
                       </div>
-                      {isPartner ? (
-                        <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
-                          {punchlistSteps.map((s) => s.punchlist_notes).join('\n\n')}
-                        </p>
-                      ) : (
-                        <div className="space-y-2">
-                          {punchlistSteps.map((s) => (
-                            <p key={s.id} className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
-                              <span className="font-semibold">
-                                L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}:
-                              </span>{' '}
+                      <div className="space-y-3">
+                        {punchlistSteps.map((s) => (
+                          <div key={s.id}>
+                            <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
+                              {!isPartner && (
+                                <span className="font-semibold">
+                                  L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}:
+                                </span>
+                              )}{' '}
                               {s.punchlist_notes}
                             </p>
-                          ))}
-                        </div>
-                      )}
+                            {s.evidence_path && (
+                              <a
+                                href={`/documents/${doc.id}/approval-steps/${s.id}/evidence`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-ming hover:underline"
+                              >
+                                <Paperclip className="h-3 w-3" /> {t('documents.show.preview_evidence')}
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {(() => {
+                        const failedVerification = doc.punchlist_verifications?.find((v) => v.status === 'rejected' && v.evidence_path);
+                        return failedVerification ? (
+                          <div className="mt-3 rounded-md border border-danger/20 bg-white/60 p-3">
+                            <p className="mb-1 text-xs font-semibold text-danger">{t('documents.show.fail_evidence_heading')}</p>
+                            {failedVerification.notes && (
+                              <p className="mb-1.5 whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">{failedVerification.notes}</p>
+                            )}
+                            <a
+                              href={`/documents/${doc.id}/punchlist-verifications/${failedVerification.id}/evidence`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-ming hover:underline"
+                            >
+                              <Paperclip className="h-3 w-3" /> {t('documents.show.preview_evidence')}
+                            </a>
+                          </div>
+                        ) : null;
+                      })()}
                       {canEditPunchlist && (
                         <Link
                           href={`/documents/${doc.id}/edit`}
@@ -1226,6 +1318,21 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   )}
                 </div>
               </div>
+
+              {isSuperAdmin && (
+                <div className="rounded-lg border border-danger/30 bg-danger-surface/40 p-5 shadow-xs">
+                  <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-danger">
+                    <AlertTriangle className="h-3.5 w-3.5" /> {t('documents.show.danger_zone_heading')}
+                  </p>
+                  <p className="mb-3 text-xs text-[var(--color-text-secondary)]">{t('documents.show.danger_zone_body')}</p>
+                  <button
+                    onClick={() => setShowDeleteDocModal(true)}
+                    className="flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-danger/40 text-sm font-semibold text-danger transition-colors hover:bg-danger-surface"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> {t('documents.show.delete_document_btn')}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </TabsContent>
@@ -1328,6 +1435,14 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
           submitting={submittingApproval}
           onCancel={() => setShowSubmitConfirm(false)}
           onConfirm={handleSubmitApproval}
+        />
+      )}
+      {showDeleteDocModal && (
+        <DeleteDocumentModal
+          uniqueId={doc.unique_id}
+          submitting={deletingDoc}
+          onCancel={() => setShowDeleteDocModal(false)}
+          onConfirm={handleDeleteDocument}
         />
       )}
     </AppShell>

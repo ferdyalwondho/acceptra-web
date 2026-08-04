@@ -18,6 +18,8 @@ class PunchlistVerification extends Model
         'status',
         'verified_at',
         'notes',
+        'evidence_path',
+        'evidence_original_filename',
     ];
 
     protected $casts = [

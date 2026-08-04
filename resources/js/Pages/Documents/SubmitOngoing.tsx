@@ -114,6 +114,88 @@ function Field({
   );
 }
 
+function ApprovalChainConfirmModal({
+  levels,
+  templateLevels,
+  approvers,
+  submitting,
+  onCancel,
+  onConfirm,
+}: {
+  levels: OfflineLevel[];
+  templateLevels: TemplateLevelOption[];
+  approvers: Record<string, Array<{ id: string; name: string }>>;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onCancel} />
+      <div className="relative z-[410] w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-semibold text-[var(--color-text-primary)]">Konfirmasi Alur Approval</h2>
+          <button onClick={onCancel} className="rounded-md p-1 transition-colors hover:bg-[var(--color-bg-subtle)]">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mb-4 text-sm text-[var(--color-text-secondary)]">
+          Dokumen ini akan melalui alur approval berikut. Pastikan level dan approver sudah benar sebelum submit.
+        </p>
+        <div className="max-h-80 space-y-2 overflow-y-auto">
+          {levels.map((level) => {
+            const tplLevel  = templateLevels.find((l) => l.level_order === level.level_order);
+            const roleLabel = tplLevel?.role_label ?? ROLE_LABELS[tplLevel?.role ?? ''] ?? `L${level.level_order}`;
+            let approverDisplay: string;
+            if (level.is_offline) {
+              approverDisplay = level.approver_name || '—';
+            } else {
+              const list = approvers[tplLevel?.role ?? ''] ?? [];
+              approverDisplay = list.find((u) => u.id === level.approver_id)?.name ?? '—';
+            }
+            return (
+              <div
+                key={level.level_order}
+                className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium text-[var(--color-text-primary)]">L{level.level_order} — {roleLabel}</p>
+                  <p className="truncate text-xs text-[var(--color-text-secondary)]">{approverDisplay}</p>
+                </div>
+                <span
+                  className={cn(
+                    'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                    level.is_offline
+                      ? 'bg-brand-ink text-white'
+                      : 'bg-[var(--color-bg-surface)] text-[var(--color-text-primary)] ring-1 ring-[var(--color-border-strong)]',
+                  )}
+                >
+                  {level.is_offline ? 'Approved (offline)' : 'Pending (digital)'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]"
+          >
+            Batal, Cek Lagi
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={submitting}
+            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+          >
+            {submitting ? 'Menyimpan…' : 'Ya, Submit Dokumen'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DocumentSubmitOngoing({ templates, clusters, partners, defaults }: Props) {
   const [templateLevels, setTemplateLevels] = useState<TemplateLevelOption[]>([]);
   const [approvers, setApprovers]           = useState<Record<string, Array<{ id: string; name: string }>>>({});
@@ -164,12 +246,14 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
         const allLevels = [L1_SYNTHETIC, ...data.data];
         setTemplateLevels(allLevels);
 
-        // Init levels form data — all default to offline
+        // Init levels form data — L1 always offline, L2+ default to Pending (digital)
+        // so a rushed submission doesn't silently mis-route a level that should be
+        // reviewed digitally.
         form.setData(
           'levels',
           allLevels.map((l) => ({
             level_order:    l.level_order,
-            is_offline:     true,
+            is_offline:     l.level_order === 1,
             approver_name:  '',
             offline_date:   '',
             evidence_file:  null,
@@ -282,9 +366,18 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
   const uniqueIdDup = useDuplicateCheck('unique_id', form.data.unique_id);
   const ptIndexDup  = useDuplicateCheck('pt_index', form.data.pt_index);
 
+  const [showConfirm, setShowConfirm] = useState(false);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    form.post('/documents/submit-ongoing', { forceFormData: true });
+    setShowConfirm(true);
+  }
+
+  function confirmSubmit() {
+    form.post('/documents/submit-ongoing', {
+      forceFormData: true,
+      onFinish: () => setShowConfirm(false),
+    });
   }
 
   // Helper to get a nested level error from form.errors
@@ -729,6 +822,17 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
           </button>
         </div>
       </form>
+
+      {showConfirm && (
+        <ApprovalChainConfirmModal
+          levels={form.data.levels}
+          templateLevels={templateLevels}
+          approvers={approvers}
+          submitting={form.processing}
+          onCancel={() => setShowConfirm(false)}
+          onConfirm={confirmSubmit}
+        />
+      )}
     </AppShell>
   );
 }
