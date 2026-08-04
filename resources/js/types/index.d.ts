@@ -386,3 +386,23 @@ export interface DocumentFilters {
   sort: string;
   dir: 'asc' | 'desc';
 }
+
+// ── Deleted Documents Log ────────────────────────────────────────────────
+
+export interface DeletedDocumentLogItem {
+  id: string;
+  unique_id: string;
+  project_code: string | null;
+  sow_name: string | null;
+  reason: string;
+  deleted_by_name: string;
+  deleted_at: string;
+}
+
+export interface DeletedDocumentFilters {
+  search: string | null;
+  date_from: string | null;
+  date_to: string | null;
+  sort: string;
+  dir: 'asc' | 'desc';
+}

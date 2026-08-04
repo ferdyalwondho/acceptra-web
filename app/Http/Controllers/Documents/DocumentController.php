@@ -8,6 +8,7 @@ use App\Jobs\NotifyApproverTurnJob;
 use App\Jobs\NotifyReassignedJob;
 use App\Models\ApprovalStep;
 use App\Models\Cluster;
+use App\Models\DeletedDocumentLog;
 use App\Models\Document;
 use App\Models\DocumentAttachment;
 use App\Models\InAppNotification;
@@ -252,9 +253,7 @@ class DocumentController extends Controller
         abort_if($user->role !== 'super_admin', 403, 'Only Super Admin can delete a document.');
 
         $request->validate([
-            'confirm_text' => ['required', 'string', Rule::in([$document->unique_id])],
-        ], [
-            'confirm_text.in' => 'Confirmation text does not match the document Unique ID.',
+            'reason' => ['required', 'string', 'max:1000'],
         ]);
 
         $uniqueId = $document->unique_id;
@@ -265,7 +264,17 @@ class DocumentController extends Controller
             ->filter()
             ->unique();
 
-        DB::transaction(function () use ($document) {
+        DB::transaction(function () use ($document, $user, $request) {
+            DeletedDocumentLog::create([
+                'unique_id'       => $document->unique_id,
+                'project_code'    => $document->project_code,
+                'sow_name'        => $document->sow_name,
+                'reason'          => $request->input('reason'),
+                'deleted_by'      => $user->id,
+                'deleted_by_name' => $user->name,
+                'deleted_at'      => now(),
+            ]);
+
             $document->attachments()->delete();
             $document->approvalSteps()->delete();
             $document->auditLogs()->delete();
@@ -287,6 +296,59 @@ class DocumentController extends Controller
         ]);
 
         return redirect()->route('documents.index')->with('success', "Document {$uniqueId} has been permanently deleted.");
+    }
+
+    // GET /documents/deleted — Admin & Super Admin only. Lists the snapshot log
+    // written by destroy() before each hard delete, since the source Document row
+    // (and its audit_logs) no longer exist to query afterwards.
+    public function deletedIndex(Request $request): Response
+    {
+        abort_if(! in_array($request->user()->role, self::ADMIN_ROLES), 403);
+
+        $query = DeletedDocumentLog::query();
+
+        if ($search = $request->input('search')) {
+            $query->where(function ($q) use ($search) {
+                $q->where('unique_id', 'ilike', "%{$search}%")
+                    ->orWhere('project_code', 'ilike', "%{$search}%")
+                    ->orWhere('sow_name', 'ilike', "%{$search}%")
+                    ->orWhere('reason', 'ilike', "%{$search}%");
+            });
+        }
+
+        if ($dateFrom = $request->input('date_from')) {
+            $query->whereDate('deleted_at', '>=', $dateFrom);
+        }
+
+        if ($dateTo = $request->input('date_to')) {
+            $query->whereDate('deleted_at', '<=', $dateTo);
+        }
+
+        $sort = in_array($request->input('sort'), ['deleted_at', 'unique_id', 'project_code', 'sow_name'], true)
+            ? $request->input('sort')
+            : 'deleted_at';
+        $dir = $request->input('dir') === 'asc' ? 'asc' : 'desc';
+
+        $logs = $query->orderBy($sort, $dir)->paginate(10)->through(fn (DeletedDocumentLog $l) => [
+            'id'              => $l->id,
+            'unique_id'       => $l->unique_id,
+            'project_code'    => $l->project_code,
+            'sow_name'        => $l->sow_name,
+            'reason'          => $l->reason,
+            'deleted_by_name' => $l->deleted_by_name,
+            'deleted_at'      => $l->deleted_at->format('d M Y H:i'),
+        ]);
+
+        return Inertia::render('Documents/Deleted', [
+            'logs'    => $logs,
+            'filters' => [
+                'search'    => $request->input('search'),
+                'date_from' => $request->input('date_from'),
+                'date_to'   => $request->input('date_to'),
+                'sort'      => $sort,
+                'dir'       => $dir,
+            ],
+        ]);
     }
 
     // GET /documents/{id}/edit

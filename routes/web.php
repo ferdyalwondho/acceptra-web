@@ -77,6 +77,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/submit-ongoing',  [DocumentController::class, 'submitOngoingCreate'])->name('documents.submit-ongoing');
     Route::post('/documents/submit-ongoing', [DocumentController::class, 'submitOngoingStore'])->name('documents.submit-ongoing.store');
     Route::get('/documents/export', DocumentExportController::class)->name('documents.export');
+    Route::get('/documents/deleted', [DocumentController::class, 'deletedIndex'])->name('documents.deleted');
 
     Route::get('/documents/{id}',           [DocumentController::class, 'show'])->name('documents.show');
     Route::get('/documents/{id}/edit',      [DocumentController::class, 'edit'])->name('documents.edit');
