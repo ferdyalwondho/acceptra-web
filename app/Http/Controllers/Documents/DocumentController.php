@@ -22,6 +22,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
@@ -138,7 +140,7 @@ class DocumentController extends Controller
     public function show(Request $request, string $id): Response
     {
         $user     = $request->user();
-        $document = Document::with(['partner', 'submitter', 'template', 'approvalSteps.approver'])
+        $document = Document::with(['partner', 'submitter', 'template', 'approvalSteps.approver', 'punchlistVerifications.approver'])
             ->findOrFail($id);
 
         // Basic access: partner sees only own docs; others see all (full RBAC in later FR)
@@ -211,6 +213,19 @@ class DocumentController extends Controller
                     'action_at'           => $s->action_at?->toISOString(),
                     'reject_reason'       => $s->reject_reason,
                     'punchlist_notes'     => $s->punchlist_notes,
+                    'evidence_path'               => $s->evidence_path,
+                    'evidence_original_filename'  => $s->evidence_original_filename,
+                ]),
+                'punchlist_verifications' => $document->punchlistVerifications->map(fn ($v) => [
+                    'id'                          => $v->id,
+                    'approval_step_id'            => $v->approval_step_id,
+                    'approver_id'                 => $v->approver_id,
+                    'approver_name'               => $v->approver?->name,
+                    'status'                      => $v->status,
+                    'verified_at'                 => $v->verified_at?->toISOString(),
+                    'notes'                       => $v->notes,
+                    'evidence_path'               => $v->evidence_path,
+                    'evidence_original_filename'  => $v->evidence_original_filename,
                 ]),
                 'atp_punchlist' => $document->atp_punchlist,
             ],
@@ -224,6 +239,52 @@ class DocumentController extends Controller
             'audit_logs'  => $auditLogs,
             'initial_tab' => $request->query('tab', 'overview'),
         ]);
+    }
+
+    // DELETE /documents/{id} — Super Admin only. Hard-deletes the document, its PDFs,
+    // approval log, and attachments so the unique_id/pt_index are freed for resubmission
+    // (SoftDeletes / Rule::unique would still block reuse of those IDs otherwise).
+    public function destroy(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with('attachments')->findOrFail($id);
+
+        abort_if($user->role !== 'super_admin', 403, 'Only Super Admin can delete a document.');
+
+        $request->validate([
+            'confirm_text' => ['required', 'string', Rule::in([$document->unique_id])],
+        ], [
+            'confirm_text.in' => 'Confirmation text does not match the document Unique ID.',
+        ]);
+
+        $uniqueId = $document->unique_id;
+        $filePaths = $document->attachments->pluck('file_path')
+            ->merge([$document->original_pdf_path, $document->final_pdf_path, $document->previous_pdf_path])
+            ->filter()
+            ->unique();
+
+        DB::transaction(function () use ($document) {
+            $document->attachments()->delete();
+            $document->approvalSteps()->delete();
+            $document->auditLogs()->delete();
+            $document->punchlistVerifications()->delete();
+            $document->forceDelete();
+        });
+
+        foreach ($filePaths as $path) {
+            if (Storage::exists($path)) {
+                Storage::delete($path);
+            }
+        }
+
+        Log::warning('Document hard-deleted by Super Admin', [
+            'document_id' => $id,
+            'unique_id'   => $uniqueId,
+            'deleted_by'  => $user->id,
+            'deleted_at'  => now()->toISOString(),
+        ]);
+
+        return redirect()->route('documents.index')->with('success', "Document {$uniqueId} has been permanently deleted.");
     }
 
     // GET /documents/{id}/edit

@@ -308,16 +308,25 @@ class ApprovalController extends Controller
         $request->validate([
             'action'          => ['required', 'in:approve,approve_with_punchlist'],
             'punchlist_notes' => ['required_if:action,approve_with_punchlist', 'nullable', 'string'],
+            'evidence_file'   => ['required_if:action,approve_with_punchlist', 'nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
             'signature_id'    => ['nullable', 'uuid'],
             'signature_data'  => ['nullable', 'string'],
         ]);
 
         $action = $request->input('action');
 
+        $evidencePath = null;
+        $evidenceName = null;
+        if ($request->hasFile('evidence_file')) {
+            $evidenceFile = $request->file('evidence_file');
+            $evidencePath = $evidenceFile->store('documents/approval-evidence');
+            $evidenceName = $evidenceFile->getClientOriginalName();
+        }
+
         $nextStep               = null;
         $routingPendingTriggered = false;
 
-        DB::transaction(function () use ($user, $document, $activeStep, $action, $request, &$nextStep, &$routingPendingTriggered) {
+        DB::transaction(function () use ($user, $document, $activeStep, $action, $request, $evidencePath, $evidenceName, &$nextStep, &$routingPendingTriggered) {
             // Resolve signature: use existing ID, or save new base64 data
             $signatureId = $request->input('signature_id');
             if (! $signatureId && $request->filled('signature_data')) {
@@ -338,12 +347,14 @@ class ApprovalController extends Controller
             }
 
             $activeStep->update([
-                'status'          => $action === 'approve' ? 'approved' : 'approved_with_punchlist',
-                'punchlist_notes' => $action === 'approve_with_punchlist' ? $request->input('punchlist_notes') : null,
-                'action_at'       => now(),
-                'is_active'       => false,
-                'signature_id'    => $signatureId,
-                'approver_id'     => $activeStep->approver_id ?? $user->id,
+                'status'                      => $action === 'approve' ? 'approved' : 'approved_with_punchlist',
+                'punchlist_notes'             => $action === 'approve_with_punchlist' ? $request->input('punchlist_notes') : null,
+                'evidence_path'               => $evidencePath,
+                'evidence_original_filename'  => $evidenceName,
+                'action_at'                   => now(),
+                'is_active'                   => false,
+                'signature_id'                => $signatureId,
+                'approver_id'                 => $activeStep->approver_id ?? $user->id,
             ]);
 
             // Every approve changes the signature and/or status_code (both get stamped
@@ -515,18 +526,25 @@ class ApprovalController extends Controller
 
         $request->validate([
             'reject_reason' => ['required', 'string'],
+            'evidence_file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
         ]);
+
+        $evidenceFile = $request->file('evidence_file');
+        $evidencePath = $evidenceFile->store('documents/approval-evidence');
+        $evidenceName = $evidenceFile->getClientOriginalName();
 
         $isL1Gate          = false;
         $isPunchlistL1Gate = false;
 
-        DB::transaction(function () use ($user, $document, $activeStep, $request, &$isL1Gate, &$isPunchlistL1Gate) {
+        DB::transaction(function () use ($user, $document, $activeStep, $request, $evidencePath, $evidenceName, &$isL1Gate, &$isPunchlistL1Gate) {
             $activeStep->update([
-                'status'        => 'rejected',
-                'reject_reason' => $request->input('reject_reason'),
-                'action_at'     => now(),
-                'is_active'     => false,
-                'approver_id'   => $activeStep->approver_id ?? $user->id,
+                'status'                      => 'rejected',
+                'reject_reason'               => $request->input('reject_reason'),
+                'evidence_path'               => $evidencePath,
+                'evidence_original_filename'  => $evidenceName,
+                'action_at'                   => now(),
+                'is_active'                   => false,
+                'approver_id'                 => $activeStep->approver_id ?? $user->id,
             ]);
 
             // Rejecting the L1 gate of a Subcon-uploaded punchlist revision is a distinct
@@ -592,6 +610,41 @@ class ApprovalController extends Controller
             ->with('success', $isL1Gate
                 ? 'Revision rejected. The Partner has been notified to resubmit.'
                 : 'Revision rejected. Admin Aviat has been notified.');
+    }
+
+    // GET /documents/{id}/approval-steps/{stepId}/evidence
+    public function downloadEvidence(Request $request, string $documentId, string $stepId)
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps')->findOrFail($documentId);
+        $step     = $document->approvalSteps->firstWhere('id', $stepId);
+
+        abort_if(! $step, 404);
+        $this->authorizeEvidenceAccess($user, $document);
+
+        abort_if(! $step->evidence_path || ! Storage::exists($step->evidence_path), 404, 'Evidence file not found.');
+
+        return Storage::download($step->evidence_path, $step->evidence_original_filename ?? 'evidence');
+    }
+
+    private function authorizeEvidenceAccess(object $user, Document $document): void
+    {
+        if (in_array($user->role, [...self::ADMIN_ROLES, 'viewer'])) {
+            return;
+        }
+
+        if ($user->role === 'partner') {
+            abort_if($document->submitted_by !== $user->id, 403);
+            return;
+        }
+
+        if (in_array($user->role, self::APPROVER_ROLES)) {
+            $isInvolved = $document->approvalSteps->contains(fn ($step) => $step->approver_id === $user->id);
+            abort_if(! $isInvolved, 403);
+            return;
+        }
+
+        abort(403);
     }
 
     private function authorizeApprovalAccess(object $user, Document $document): void

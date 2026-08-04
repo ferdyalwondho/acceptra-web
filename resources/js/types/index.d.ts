@@ -200,6 +200,20 @@ export interface ApprovalStepRecord {
   action_at: string | null;
   reject_reason: string | null;
   punchlist_notes: string | null;
+  evidence_path: string | null;
+  evidence_original_filename: string | null;
+}
+
+export interface PunchlistVerificationRecord {
+  id: string;
+  approval_step_id: string;
+  approver_id: string;
+  approver_name: string | null;
+  status: 'pending' | 'verified' | 'rejected';
+  verified_at: string | null;
+  notes: string | null;
+  evidence_path: string | null;
+  evidence_original_filename: string | null;
 }
 
 export interface ExcelAttachment {
@@ -339,6 +353,7 @@ export interface DocumentRecord {
   submitter: { id: string; name: string } | null;
   created_at: string;
   approval_steps: ApprovalStepRecord[];
+  punchlist_verifications: PunchlistVerificationRecord[];
   excel_attachment: ExcelAttachment | null;
   atp_punchlist: string | null;
 }
