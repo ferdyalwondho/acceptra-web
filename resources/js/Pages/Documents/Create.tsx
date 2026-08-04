@@ -3,6 +3,8 @@ import { Head, Link, useForm } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import SearchableSelect from '@/components/acceptra/SearchableSelect';
+import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
 import type { PageProps, PartnerOption, TemplateOption, TemplateLevelOption, ClusterOption } from '@/types';
@@ -76,6 +78,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
   const [loadingLevels, setLoadingLevels] = useState(false);
   const [resolvedApprovers, setResolvedApprovers] = useState<ResolvedApprover[]>([]);
   const [resolving, setResolving] = useState(false);
+  const [clusterEditedManually, setClusterEditedManually] = useState(false);
 
   const form = useForm<{
     unique_id: string;
@@ -104,6 +107,9 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
     excel_file: null,
     _draft: false,
   });
+
+  const uniqueIdDup = useDuplicateCheck('unique_id', form.data.unique_id);
+  const ptIndexDup  = useDuplicateCheck('pt_index', form.data.pt_index);
 
   // Fetch template levels when template changes
   useEffect(() => {
@@ -139,8 +145,17 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id, form.data.cluster_zone, is_admin_submit]);
 
-  function handleTemplateChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    form.setData('template_id', e.target.value);
+  // Sync Cluster Zone to the selected template's default cluster whenever the
+  // template changes — unless the admin has already edited Cluster Zone manually.
+  useEffect(() => {
+    if (clusterEditedManually || !form.data.template_id) return;
+    const tpl = templates.find((t) => t.id === form.data.template_id);
+    if (tpl?.default_cluster) form.setData('cluster_zone', tpl.default_cluster);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.template_id]);
+
+  function handleTemplateChange(templateId: string) {
+    form.setData('template_id', templateId);
   }
 
   function handlePdfChange(file: File | null) {
@@ -191,29 +206,34 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
             {is_admin_submit && (
               <div className="sm:col-span-2">
                 <Field label={t('documents_create.field_partner')} required error={form.errors.partner_id}>
-                  <select
+                  <SearchableSelect
+                    options={(partners ?? []).map((p) => ({ value: p.id, label: p.name }))}
                     value={form.data.partner_id}
-                    onChange={(e) => form.setData('partner_id', e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="">{t('documents_create.placeholder_partner')}</option>
-                    {(partners ?? []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                    onChange={(v) => form.setData('partner_id', v)}
+                    placeholder={t('documents_create.placeholder_partner')}
+                    hasError={!!form.errors.partner_id}
+                  />
                 </Field>
               </div>
             )}
 
             <div className="sm:col-span-2">
-              <Field label={t('documents_create.field_unique_id')} required error={form.errors.unique_id}>
+              <Field
+                label={t('documents_create.field_unique_id')}
+                required
+                error={form.errors.unique_id ?? (uniqueIdDup.duplicate ? t('documents_create.duplicate_unique_id') : undefined)}
+              >
                 <input
                   type="text"
                   placeholder={t('documents_create.placeholder_unique_id')}
                   value={form.data.unique_id}
+                  maxLength={50}
                   onChange={(e) => form.setData('unique_id', e.target.value.toUpperCase())}
-                  className={inputCls}
+                  className={cn(inputCls, uniqueIdDup.duplicate && 'border-danger')}
                 />
+                {uniqueIdDup.checking && (
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{t('documents_create.checking_duplicate')}</p>
+                )}
               </Field>
             </div>
 
@@ -229,18 +249,25 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
             </div>
 
             <div className="sm:col-span-2">
-              <Field label={t('documents_create.field_pt_index')} required error={form.errors.pt_index}>
+              <Field
+                label={t('documents_create.field_pt_index')}
+                required
+                error={form.errors.pt_index ?? (ptIndexDup.duplicate ? t('documents_create.duplicate_pt_index') : undefined)}
+              >
                 <input
                   type="text"
                   placeholder={t('documents_create.placeholder_pt_index')}
                   value={form.data.pt_index}
                   onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
-                  className={inputCls}
+                  className={cn(inputCls, ptIndexDup.duplicate && 'border-danger')}
                 />
+                {ptIndexDup.checking && (
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{t('documents_create.checking_duplicate')}</p>
+                )}
               </Field>
             </div>
 
-            <Field label={t('documents_create.field_project_code')} error={form.errors.project_code}>
+            <Field label={t('documents_create.field_project_code')} required error={form.errors.project_code}>
               <input
                 type="text"
                 placeholder="MW-BKS-2406"
@@ -249,7 +276,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
                 className={inputCls}
               />
             </Field>
-            <Field label={t('documents_create.field_link_id')} error={form.errors.link_id}>
+            <Field label={t('documents_create.field_link_id')} required error={form.errors.link_id}>
               <input
                 type="text"
                 placeholder="LNK-001"
@@ -259,7 +286,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
               />
             </Field>
             <div className="sm:col-span-2">
-              <Field label={t('documents_create.field_link_name')} error={form.errors.link_name}>
+              <Field label={t('documents_create.field_link_name')} required error={form.errors.link_name}>
                 <input
                   type="text"
                   placeholder="Microwave Link – Bekasi Sektor 4"
@@ -272,16 +299,16 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
 
             <div className="sm:col-span-2">
               <Field label={t('documents_create.field_cluster_zone')} required error={form.errors.cluster_zone}>
-                <select
+                <SearchableSelect
+                  options={clusters.map((c) => ({ value: c.display_name, label: c.display_name, sublabel: c.province }))}
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="">{t('documents_create.placeholder_cluster_zone')}</option>
-                  {clusters.map((c) => (
-                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
-                  ))}
-                </select>
+                  onChange={(v) => {
+                    setClusterEditedManually(true);
+                    form.setData('cluster_zone', v);
+                  }}
+                  placeholder={t('documents_create.placeholder_cluster_zone')}
+                  hasError={!!form.errors.cluster_zone}
+                />
               </Field>
             </div>
           </div>
@@ -290,19 +317,17 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
         {/* ─── 2. SOW Template ─── */}
         <Section step={2} title={t('documents_create.section_sow')} done={!!form.data.template_id}>
           <Field label={t('documents_create.field_template')} required error={form.errors.template_id}>
-            <select
+            <SearchableSelect
+              options={templates.map((tmpl) => ({
+                value: tmpl.id,
+                label: `${tmpl.name}${tmpl.sow_code ? ` (${tmpl.sow_code})` : ''}`,
+              }))}
               value={form.data.template_id}
               onChange={handleTemplateChange}
-              className={inputCls}
+              placeholder={t('documents_create.placeholder_template')}
               disabled={loadingLevels}
-            >
-              <option value="">{t('documents_create.placeholder_template')}</option>
-              {templates.map((tmpl) => (
-                <option key={tmpl.id} value={tmpl.id}>
-                  {tmpl.name}{tmpl.sow_code ? ` (${tmpl.sow_code})` : ''}
-                </option>
-              ))}
-            </select>
+              hasError={!!form.errors.template_id}
+            />
           </Field>
 
           {levels.length > 0 && (
@@ -475,7 +500,7 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
           </Link>
           <button
             type="button"
-            disabled={form.processing}
+            disabled={form.processing || uniqueIdDup.duplicate || ptIndexDup.duplicate}
             onClick={() => submit(true)}
             className="h-9 rounded-md border border-[var(--color-border-strong)] bg-white px-5 text-sm font-medium transition-colors hover:bg-[var(--color-bg-subtle)] disabled:opacity-50"
           >
@@ -483,7 +508,12 @@ export default function DocumentCreate({ templates, clusters, partner, partners,
           </button>
           <button
             type="submit"
-            disabled={form.processing || (is_admin_submit && levels.length > 0 && !allPicsFilled)}
+            disabled={
+              form.processing
+              || (is_admin_submit && levels.length > 0 && !allPicsFilled)
+              || uniqueIdDup.duplicate || uniqueIdDup.checking
+              || ptIndexDup.duplicate || ptIndexDup.checking
+            }
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
           >
             {form.processing ? t('documents_create.btn_processing') : t('documents_create.btn_submit')}

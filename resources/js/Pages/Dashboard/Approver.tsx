@@ -4,24 +4,16 @@ import AppShell, { PageHeader } from '@/layouts/AppShell';
 import StatusBadge from '@/components/acceptra/StatusBadge';
 import {
   CheckCircle2, XCircle, ClipboardList, Clock, History,
-  ArrowRight, BadgeCheck,
+  ArrowRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { NeedApprovalDoc, ApproverHistoryEntry } from '@/types';
-
-interface Stats {
-  pending:           number;
-  approved:          number;
-  punchlist_pending: number;
-  rejected_pending:  number;
-  atp_done:          number;
-}
+import type { NeedApprovalDoc, ApproverHistoryEntry, ApprovalStatusCounts } from '@/types';
 
 interface Props {
   need_approval:       NeedApprovalDoc[];
   need_approval_count: number;
   recent_history:      ApproverHistoryEntry[];
-  stats:               Stats;
+  stats:               ApprovalStatusCounts;
 }
 
 /* ── Color palette (hex — reliable in both SVG and CSS) ──────────────────── */
@@ -30,7 +22,6 @@ const C = {
   approved: '#22c55e',
   punchlist:'#f59e0b',
   rejected: '#ef4444',
-  atpDone:  '#0ea5e9',
 };
 
 /* ── SVG Donut Chart ─────────────────────────────────────────────────────── */
@@ -156,13 +147,12 @@ export default function DashboardApprover({ need_approval, need_approval_count, 
         }
       />
 
-      {/* ── 5 Stat Cards ── */}
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      {/* ── 4 Stat Cards ── */}
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label={t('approver_dashboard.stat_pending')}   value={stats.pending}           icon={<Clock className="h-5 w-5" />}         hex={C.pending}  />
         <StatCard label={t('approver_dashboard.stat_approved')}  value={stats.approved}          icon={<CheckCircle2 className="h-5 w-5" />}  hex={C.approved} />
         <StatCard label={t('approver_dashboard.stat_punchlist')} value={stats.punchlist_pending} icon={<ClipboardList className="h-5 w-5" />} hex={C.punchlist}/>
         <StatCard label={t('approver_dashboard.stat_rejected')}  value={stats.rejected_pending}  icon={<XCircle className="h-5 w-5" />}       hex={C.rejected} />
-        <StatCard label={t('approver_dashboard.stat_atp_done')}  value={stats.atp_done}          icon={<BadgeCheck className="h-5 w-5" />}    hex={C.atpDone}  />
       </div>
 
       {/* ── Chart + Need Approval ── */}

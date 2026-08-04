@@ -7,15 +7,19 @@ import {
 import AppShell, { PageHeader } from '@/layouts/AppShell';
 import StatusBadge from '@/components/acceptra/StatusBadge';
 import ExportExcelButton from '@/components/acceptra/ExportExcelButton';
-import { FileText, CheckCircle2, AlertTriangle, Clock, Plus, Activity, FileClock, Users } from 'lucide-react';
+import {
+  FileText, CheckCircle2, AlertTriangle, Clock, Plus, Activity, FileClock, Users,
+  ClipboardList, XCircle, BadgeCheck,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type {
-  PageProps, AdminMetrics, ActiveDoc, OverdueDoc, ActivityEntry,
+  PageProps, AdminMetrics, ApprovalStatusCounts, ActiveDoc, OverdueDoc, ActivityEntry,
   ApprovalStageEntry, WeeklyTrendEntry, TopPartnerEntry,
 } from '@/types';
 
 interface Props {
   metrics: AdminMetrics;
+  approval_status: ApprovalStatusCounts;
   active_documents: ActiveDoc[];
   overdue_approvals: OverdueDoc[];
   recent_activity: ActivityEntry[];
@@ -27,17 +31,20 @@ interface Props {
   top_partners: TopPartnerEntry[];
 }
 
-const STATUS_COLORS = {
-  draft:         '#94a3b8',
-  active:        '#185FA5',
-  need_revision: '#854F0B',
-  completed:     '#3B6D11',
-} as const;
-
 const STAGE_COLORS = ['#185FA5', '#55AA39', '#854F0B', '#A32D2D'];
 
+// Kept in sync with the per-approver-step palette in Dashboard/Approver.tsx (`C`)
+// so the same status category reads as the same color on both dashboards.
+const APPROVAL_STATUS_COLORS = {
+  pending:           '#6366f1',
+  approved:          '#22c55e',
+  punchlist_pending: '#f59e0b',
+  rejected_pending:  '#ef4444',
+  atp_done:          '#0ea5e9',
+} as const;
+
 export default function DashboardAdmin({
-  metrics, active_documents, overdue_approvals, recent_activity,
+  metrics, approval_status, active_documents, overdue_approvals, recent_activity,
   approval_stage_breakdown, weekly_trend, selected_month, selected_year,
   available_years, top_partners,
 }: Props) {
@@ -70,24 +77,38 @@ export default function DashboardAdmin({
 
   const metricCards = [
     {
-      label: t('admin_dashboard.metric_active'),
-      value: metrics.active,
-      icon: <FileText className="h-5 w-5" />,
+      label: t('approver_dashboard.stat_pending'),
+      value: approval_status.pending,
+      icon: <Clock className="h-5 w-5" />,
       href: '/documents?filter=active',
       highlight: false,
     },
     {
-      label: t('admin_dashboard.metric_completed'),
-      value: metrics.completed,
+      label: t('approver_dashboard.stat_approved'),
+      value: approval_status.approved,
       icon: <CheckCircle2 className="h-5 w-5" />,
-      href: '/documents?status=13',
+      href: '/documents',
       highlight: false,
     },
     {
-      label: t('admin_dashboard.metric_need_revision'),
-      value: metrics.need_revision,
-      icon: <Clock className="h-5 w-5" />,
+      label: t('approver_dashboard.stat_punchlist'),
+      value: approval_status.punchlist_pending,
+      icon: <ClipboardList className="h-5 w-5" />,
+      href: '/documents?status=15',
+      highlight: false,
+    },
+    {
+      label: t('approver_dashboard.stat_rejected'),
+      value: approval_status.rejected_pending,
+      icon: <XCircle className="h-5 w-5" />,
       href: '/documents?filter=revision',
+      highlight: false,
+    },
+    {
+      label: t('approver_dashboard.stat_atp_done'),
+      value: approval_status.atp_done,
+      icon: <BadgeCheck className="h-5 w-5" />,
+      href: '/documents?status=13',
       highlight: false,
     },
     {
@@ -107,10 +128,11 @@ export default function DashboardAdmin({
   ];
 
   const statusDonutData = [
-    { name: t('admin_dashboard.metric_draft'),         value: metrics.draft,         color: STATUS_COLORS.draft },
-    { name: t('admin_dashboard.metric_active'),        value: metrics.active,        color: STATUS_COLORS.active },
-    { name: t('admin_dashboard.metric_need_revision'), value: metrics.need_revision, color: STATUS_COLORS.need_revision },
-    { name: t('admin_dashboard.metric_completed'),     value: metrics.completed,     color: STATUS_COLORS.completed },
+    { name: t('approver_dashboard.legend_pending'),   value: approval_status.pending,           color: APPROVAL_STATUS_COLORS.pending },
+    { name: t('approver_dashboard.legend_approved'),  value: approval_status.approved,          color: APPROVAL_STATUS_COLORS.approved },
+    { name: t('approver_dashboard.legend_punchlist'), value: approval_status.punchlist_pending, color: APPROVAL_STATUS_COLORS.punchlist_pending },
+    { name: t('approver_dashboard.legend_rejected'),  value: approval_status.rejected_pending,  color: APPROVAL_STATUS_COLORS.rejected_pending },
+    { name: t('approver_dashboard.legend_atp_done'),  value: approval_status.atp_done,          color: APPROVAL_STATUS_COLORS.atp_done },
   ].filter(d => d.value > 0);
 
   const totalDocs = statusDonutData.reduce((sum, d) => sum + d.value, 0);
@@ -150,7 +172,7 @@ export default function DashboardAdmin({
       />
 
       {/* Metric cards */}
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         {metricCards.map((m) => (
           <Link
             key={m.label}

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Head, Link, useForm } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import SearchableSelect from '@/components/acceptra/SearchableSelect';
+import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
 import type { PageProps, PartnerOption, TemplateOption, TemplateLevelOption, ClusterOption } from '@/types';
@@ -11,7 +13,9 @@ interface DraftDoc {
   unique_id: string;
   status_code: string;
   vendor_contractor: string;
-  pt_index: string;
+  // Omitted by the backend in punchlist-revision mode (edit() returns a simplified
+  // props shape there) — must stay optional, not just typed as required-but-actually-missing.
+  pt_index?: string;
   project_code: string;
   link_id: string;
   link_name: string;
@@ -107,6 +111,10 @@ export default function DocumentEdit({
   const [loadingLevels, setLoadingLevels] = useState(false);
   const [resolvedApprovers, setResolvedApprovers] = useState<ResolvedApprover[]>([]);
   const [resolving, setResolving] = useState(false);
+  // The document already carries a real cluster_zone from when it was originally
+  // submitted — treat that as already "manually set" so switching templates during
+  // a revision never silently overwrites it with a template's default cluster.
+  const [clusterEditedManually, setClusterEditedManually] = useState(!!doc.cluster_zone);
 
   const form = useForm<{
     unique_id: string;
@@ -124,7 +132,7 @@ export default function DocumentEdit({
   }>({
     unique_id:          doc.unique_id,
     vendor_contractor: doc.vendor_contractor,
-    pt_index:          doc.pt_index,
+    pt_index:          doc.pt_index ?? '',
     project_code:      doc.project_code,
     link_id:           doc.link_id,
     link_name:         doc.link_name,
@@ -135,6 +143,8 @@ export default function DocumentEdit({
     excel_file:        null,
     _draft:            false,
   });
+
+  const ptIndexDup = useDuplicateCheck('pt_index', form.data.pt_index, doc.id);
 
   // Fetch template levels whenever template changes
   useEffect(() => {
@@ -170,8 +180,18 @@ export default function DocumentEdit({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id, form.data.cluster_zone, is_admin_submit, is_rejected_revision]);
 
-  function handleTemplateChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    form.setData('template_id', e.target.value);
+  // Sync Cluster Zone to the selected template's default cluster whenever the
+  // template changes — unless Cluster Zone has already been set manually (either
+  // by the admin, or because this document already carried a real cluster_zone).
+  useEffect(() => {
+    if (clusterEditedManually || !form.data.template_id) return;
+    const tpl = templates.find((t) => t.id === form.data.template_id);
+    if (tpl?.default_cluster) form.setData('cluster_zone', tpl.default_cluster);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.template_id]);
+
+  function handleTemplateChange(templateId: string) {
+    form.setData('template_id', templateId);
   }
 
   function submit(draft: boolean) {
@@ -201,6 +221,15 @@ export default function DocumentEdit({
           title={`Upload PDF Revisi Punchlist — ${doc.unique_id}`}
           description="Upload PDF yang sudah direvisi sesuai catatan punchlist dari approver."
         />
+
+        <div className="mb-4 flex items-start gap-3 rounded-lg border border-brand/20 bg-brand-surface/40 p-4 text-sm text-brand-ink">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            {is_admin_submit
+              ? 'Setelah upload, kamu akan diarahkan untuk menempatkan ulang posisi tanda tangan (placement) sebelum verifikasi punchlist dibuka.'
+              : 'Setelah upload, revisi ini akan direview lebih dulu oleh Admin (L1) sebelum lanjut ke penempatan tanda tangan.'}
+          </span>
+        </div>
 
         {atp_punchlist && (
           <div className="mb-4 max-w-3xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
@@ -339,17 +368,14 @@ export default function DocumentEdit({
             {is_admin_submit && (
               <div className="sm:col-span-2">
                 <Field label="Partner / Subkontraktor" required error={form.errors.partner_id}>
-                  <select
+                  <SearchableSelect
+                    options={(partners ?? []).map((p) => ({ value: p.id, label: p.name }))}
                     value={form.data.partner_id}
-                    onChange={(e) => form.setData('partner_id', e.target.value)}
-                    className={is_rejected_revision ? lockedInputCls : inputCls}
+                    onChange={(v) => form.setData('partner_id', v)}
+                    placeholder="-- Pilih partner --"
                     disabled={is_rejected_revision}
-                  >
-                    <option value="">-- Pilih partner --</option>
-                    {(partners ?? []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                    hasError={!!form.errors.partner_id}
+                  />
                 </Field>
               </div>
             )}
@@ -367,19 +393,26 @@ export default function DocumentEdit({
             </div>
 
             <div className="sm:col-span-2">
-              <Field label="PT Index" required error={form.errors.pt_index}>
+              <Field
+                label="PT Index"
+                required
+                error={form.errors.pt_index ?? (ptIndexDup.duplicate ? 'PT Index ini sudah digunakan — silakan pilih yang lain.' : undefined)}
+              >
                 <input
                   type="text"
                   placeholder="mis. PT.2024.001"
                   value={form.data.pt_index}
                   onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
-                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  className={cn(is_rejected_revision ? lockedInputCls : inputCls, ptIndexDup.duplicate && 'border-danger')}
                   disabled={is_rejected_revision}
                 />
+                {!is_rejected_revision && ptIndexDup.checking && (
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">Memeriksa…</p>
+                )}
               </Field>
             </div>
 
-            <Field label="Project Code" error={form.errors.project_code}>
+            <Field label="Project Code" required error={form.errors.project_code}>
               <input
                 type="text"
                 placeholder="MW-BKS-2406"
@@ -389,7 +422,7 @@ export default function DocumentEdit({
                 disabled={is_rejected_revision}
               />
             </Field>
-            <Field label="Link ID" error={form.errors.link_id}>
+            <Field label="Link ID" required error={form.errors.link_id}>
               <input
                 type="text"
                 placeholder="LNK-001"
@@ -400,7 +433,7 @@ export default function DocumentEdit({
               />
             </Field>
             <div className="sm:col-span-2">
-              <Field label="Link Name" error={form.errors.link_name}>
+              <Field label="Link Name" required error={form.errors.link_name}>
                 <input
                   type="text"
                   placeholder="Microwave Link – Bekasi Sektor 4"
@@ -414,17 +447,17 @@ export default function DocumentEdit({
 
             <div className="sm:col-span-2">
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
-                <select
+                <SearchableSelect
+                  options={clusters.map((c) => ({ value: c.display_name, label: c.display_name, sublabel: c.province }))}
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
-                  className={is_rejected_revision ? lockedInputCls : inputCls}
+                  onChange={(v) => {
+                    setClusterEditedManually(true);
+                    form.setData('cluster_zone', v);
+                  }}
+                  placeholder="-- Pilih cluster --"
                   disabled={is_rejected_revision}
-                >
-                  <option value="">-- Pilih cluster --</option>
-                  {clusters.map((c) => (
-                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
-                  ))}
-                </select>
+                  hasError={!!form.errors.cluster_zone}
+                />
               </Field>
             </div>
           </div>
@@ -433,19 +466,17 @@ export default function DocumentEdit({
         {/* ─── 2. SOW Template ─── */}
         <Section step={2} title="SOW & Alur Approval" done={!!form.data.template_id}>
           <Field label="Template / SOW" required error={form.errors.template_id}>
-            <select
+            <SearchableSelect
+              options={templates.map((t) => ({
+                value: t.id,
+                label: `${t.name}${t.sow_code ? ` (${t.sow_code})` : ''}`,
+              }))}
               value={form.data.template_id}
               onChange={handleTemplateChange}
-              className={is_rejected_revision ? lockedInputCls : inputCls}
+              placeholder="-- Pilih template SOW --"
               disabled={loadingLevels || is_rejected_revision}
-            >
-              <option value="">-- Pilih template SOW --</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}{t.sow_code ? ` (${t.sow_code})` : ''}
-                </option>
-              ))}
-            </select>
+              hasError={!!form.errors.template_id}
+            />
           </Field>
 
           {levels.length > 0 && (
@@ -609,7 +640,7 @@ export default function DocumentEdit({
             <button
               type="button"
               onClick={() => submit(true)}
-              disabled={form.processing}
+              disabled={form.processing || ptIndexDup.duplicate}
               className="h-9 rounded-md border border-[var(--color-border-strong)] bg-white px-5 text-sm font-semibold text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-bg-subtle)] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
             >
               {form.processing ? 'Memproses…' : 'Simpan Draft'}
@@ -619,7 +650,8 @@ export default function DocumentEdit({
             type="submit"
             disabled={
               form.processing || !pdfReady || (is_rejected_revision && !form.data.pdf_file) ||
-              (is_admin_submit && !is_rejected_revision && levels.length > 0 && !allPicsFilled)
+              (is_admin_submit && !is_rejected_revision && levels.length > 0 && !allPicsFilled) ||
+              (!is_rejected_revision && (ptIndexDup.duplicate || ptIndexDup.checking))
             }
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
           >

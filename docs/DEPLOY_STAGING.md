@@ -141,7 +141,7 @@ Jangan anggap deploy selesai cuma karena container `Up`. Cek satu-satu:
 
 ### a. Aplikasi bisa diakses & login normal
 ```bash
-curl -I https://staging.acceptra.id/login   # sesuaikan domain staging
+curl -I https://acceptra.id/login   # sesuaikan domain staging
 ```
 Harus `200` atau `302`. Buka di browser, pastikan halaman login tampil, login dengan akun test berhasil.
 

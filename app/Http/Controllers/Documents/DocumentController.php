@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Documents;
 use App\Http\Controllers\Controller;
 use App\Jobs\NotifyAdminsJob;
 use App\Jobs\NotifyApproverTurnJob;
-use App\Jobs\NotifyPartnerJob;
 use App\Jobs\NotifyReassignedJob;
 use App\Models\ApprovalStep;
 use App\Models\Cluster;
@@ -23,6 +22,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
@@ -101,14 +102,15 @@ class DocumentController extends Controller
         abort_if(! in_array($user->role, self::SUBMIT_ROLES), 403);
 
         $templates = Template::where('status', 'active')
-            ->with('levels')
+            ->with(['levels', 'defaultCluster'])
             ->orderBy('name')
             ->get()
             ->map(fn (Template $t) => [
-                'id'           => $t->id,
-                'name'         => $t->name,
-                'sow_code'     => $t->sow_code,
-                'levels_count' => $t->levels->count(),
+                'id'              => $t->id,
+                'name'            => $t->name,
+                'sow_code'        => $t->sow_code,
+                'levels_count'    => $t->levels->count(),
+                'default_cluster' => $t->defaultCluster?->display_name,
             ]);
 
         $props = [
@@ -138,7 +140,7 @@ class DocumentController extends Controller
     public function show(Request $request, string $id): Response
     {
         $user     = $request->user();
-        $document = Document::with(['partner', 'submitter', 'template', 'approvalSteps.approver'])
+        $document = Document::with(['partner', 'submitter', 'template', 'approvalSteps.approver', 'punchlistVerifications.approver'])
             ->findOrFail($id);
 
         // Basic access: partner sees only own docs; others see all (full RBAC in later FR)
@@ -190,11 +192,9 @@ class DocumentController extends Controller
                 'link_name'           => $document->link_name,
                 'cluster_zone'        => $document->cluster_zone,
                 'sow_name'            => $document->sow_name,
-                'status_code'                 => $document->status_code,
-                'routing_pending'             => (bool) $document->routing_pending,
-                'revision_pending_review'     => (bool) $document->revision_pending_review,
-                'revision_placement_pending'  => (bool) $document->revision_placement_pending,
-                'previous_pdf_rejected_level' => $document->previous_pdf_rejected_level,
+                'status_code'         => $document->status_code,
+                'routing_pending'     => (bool) $document->routing_pending,
+                'is_imported'         => (bool) $document->is_imported,
                 'date_atp_submission' => $document->date_atp_submission?->toDateString(),
                 'original_pdf_path'   => $document->original_pdf_path,
                 'template_snapshot'   => $document->template_snapshot,
@@ -213,6 +213,19 @@ class DocumentController extends Controller
                     'action_at'           => $s->action_at?->toISOString(),
                     'reject_reason'       => $s->reject_reason,
                     'punchlist_notes'     => $s->punchlist_notes,
+                    'evidence_path'               => $s->evidence_path,
+                    'evidence_original_filename'  => $s->evidence_original_filename,
+                ]),
+                'punchlist_verifications' => $document->punchlistVerifications->map(fn ($v) => [
+                    'id'                          => $v->id,
+                    'approval_step_id'            => $v->approval_step_id,
+                    'approver_id'                 => $v->approver_id,
+                    'approver_name'               => $v->approver?->name,
+                    'status'                      => $v->status,
+                    'verified_at'                 => $v->verified_at?->toISOString(),
+                    'notes'                       => $v->notes,
+                    'evidence_path'               => $v->evidence_path,
+                    'evidence_original_filename'  => $v->evidence_original_filename,
                 ]),
                 'atp_punchlist' => $document->atp_punchlist,
             ],
@@ -228,6 +241,54 @@ class DocumentController extends Controller
         ]);
     }
 
+    // DELETE /documents/{id} — Super Admin only. Hard-deletes the document, its PDFs,
+    // approval log, and attachments so the unique_id/pt_index are freed for resubmission
+    // (SoftDeletes / Rule::unique would still block reuse of those IDs otherwise).
+    public function destroy(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::with(['attachments', 'approvalSteps', 'punchlistVerifications'])->findOrFail($id);
+
+        abort_if($user->role !== 'super_admin', 403, 'Only Super Admin can delete a document.');
+
+        $request->validate([
+            'confirm_text' => ['required', 'string', Rule::in([$document->unique_id])],
+        ], [
+            'confirm_text.in' => 'Confirmation text does not match the document Unique ID.',
+        ]);
+
+        $uniqueId = $document->unique_id;
+        $filePaths = $document->attachments->pluck('file_path')
+            ->merge($document->approvalSteps->pluck('evidence_path'))
+            ->merge($document->punchlistVerifications->pluck('evidence_path'))
+            ->merge([$document->original_pdf_path, $document->final_pdf_path, $document->previous_pdf_path])
+            ->filter()
+            ->unique();
+
+        DB::transaction(function () use ($document) {
+            $document->attachments()->delete();
+            $document->approvalSteps()->delete();
+            $document->auditLogs()->delete();
+            $document->punchlistVerifications()->delete();
+            $document->forceDelete();
+        });
+
+        foreach ($filePaths as $path) {
+            if (Storage::exists($path)) {
+                Storage::delete($path);
+            }
+        }
+
+        Log::warning('Document hard-deleted by Super Admin', [
+            'document_id' => $id,
+            'unique_id'   => $uniqueId,
+            'deleted_by'  => $user->id,
+            'deleted_at'  => now()->toISOString(),
+        ]);
+
+        return redirect()->route('documents.index')->with('success', "Document {$uniqueId} has been permanently deleted.");
+    }
+
     // GET /documents/{id}/edit
     public function edit(Request $request, string $id): Response
     {
@@ -236,6 +297,7 @@ class DocumentController extends Controller
             ->findOrFail($id);
 
         $isAdmin              = in_array($user->role, self::ADMIN_ROLES);
+        $isOwningPartner      = $user->role === 'partner' && $document->submitted_by === $user->id;
         $isPunchlistRevision  = $document->status_code === '14';
         $isRejectedRevision   = (bool) preg_match('/^(02|05|08|11)$/', $document->status_code ?? '');
 
@@ -243,7 +305,8 @@ class DocumentController extends Controller
         if (! $isAdmin) {
             abort_if($document->submitted_by !== $user->id, 403);
         }
-        abort_if($isPunchlistRevision && ! $isAdmin, 403);
+        // Both Admin and the owning Partner (Subcon) may upload a punchlist revision.
+        abort_if($isPunchlistRevision && ! $isAdmin && ! $isOwningPartner, 403);
         // Partners can edit their own draft or a rejected document (to upload a revision);
         // admins can open edit for any non-punchlist document (e.g. rejected).
         abort_if(! $isPunchlistRevision && ! $isAdmin && $document->status_code !== 'draft' && ! $isRejectedRevision, 422);
@@ -268,7 +331,7 @@ class DocumentController extends Controller
                     'pics'        => [],
                 ],
                 'templates'              => [],
-                'is_admin_submit'        => true,
+                'is_admin_submit'        => $isAdmin,
                 'is_punchlist_revision'  => true,
                 'last_revision_filename' => $lastRevision?->original_filename,
                 'atp_punchlist'          => $document->atp_punchlist,
@@ -276,14 +339,15 @@ class DocumentController extends Controller
         }
 
         $templates = Template::where('status', 'active')
-            ->with('levels')
+            ->with(['levels', 'defaultCluster'])
             ->orderBy('name')
             ->get()
             ->map(fn (Template $t) => [
-                'id'           => $t->id,
-                'name'         => $t->name,
-                'sow_code'     => $t->sow_code,
-                'levels_count' => $t->levels->count(),
+                'id'              => $t->id,
+                'name'            => $t->name,
+                'sow_code'        => $t->sow_code,
+                'levels_count'    => $t->levels->count(),
+                'default_cluster' => $t->defaultCluster?->display_name,
             ]);
 
         $props = [
@@ -324,22 +388,27 @@ class DocumentController extends Controller
         return Inertia::render('Documents/Edit', $props);
     }
 
-    // POST /documents/{id}/punchlist-revision — Admin upload PDF revisi punchlist
+    // POST /documents/{id}/punchlist-revision — Admin or the owning Partner (Subcon)
+    // uploads the revised PDF for a punchlist rectification.
     public function uploadPunchlistRevision(Request $request, string $id): RedirectResponse
     {
         $user     = $request->user();
-        $document = Document::findOrFail($id);
+        $document = Document::with('approvalSteps')->findOrFail($id);
 
-        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
+        $isAdmin         = in_array($user->role, self::ADMIN_ROLES);
+        $isOwningPartner = $user->role === 'partner' && $document->submitted_by === $user->id;
+
+        abort_if(! $isAdmin && ! $isOwningPartner, 403);
         abort_if($document->status_code !== '14', 422, 'Document is not in punchlist revision state.');
 
         $request->validate([
             'pdf_file' => ['required', 'file', 'mimes:pdf', 'max:20480'],
         ]);
 
-        $pdfPath = $request->file('pdf_file')->store('documents/punchlist-revisions');
+        $pdfPath          = $request->file('pdf_file')->store('documents/punchlist-revisions');
+        $previousPdfPath  = $document->original_pdf_path;
 
-        DB::transaction(function () use ($user, $document, $pdfPath, $request) {
+        DB::transaction(function () use ($user, $document, $pdfPath, $previousPdfPath, $request, $isAdmin) {
             DocumentAttachment::create([
                 'document_id'       => $document->id,
                 'type'              => 'punchlist_revision',
@@ -349,21 +418,54 @@ class DocumentController extends Controller
                 'uploaded_by'       => $user->id,
             ]);
 
-            $document->update(['status_code' => '15']);
+            // The revised PDF becomes the document's official PDF — the signature
+            // placement redo and the final signed output must both reflect it.
+            $snapshot = $document->template_snapshot;
+            $snapshot['placement'] = ['status' => 'pending', 'positions' => null];
+
+            $document->update([
+                'previous_pdf_path'  => $previousPdfPath,
+                'original_pdf_path'  => $pdfPath,
+                'final_pdf_path'     => null,
+                'template_snapshot'  => $snapshot,
+                'status_code'        => $isAdmin ? '14' : '17',
+                'routing_pending'    => $isAdmin,
+            ]);
+
+            if (! $isAdmin) {
+                // Subcon upload: reactivate the L1 gate — Admin must sanity-check the
+                // revision before it proceeds to placement, reusing the same ApprovalStep
+                // row rather than deleting/recreating it (L2-L4 rows must stay frozen).
+                $document->approvalSteps()->where('level_order', 1)->update([
+                    'status'          => 'pending',
+                    'is_active'       => true,
+                    'approver_id'     => null,
+                    'action_at'       => null,
+                    'reject_reason'   => null,
+                    'signature_id'    => null,
+                    'punchlist_notes' => null,
+                ]);
+            }
 
             AuditService::log(
                 $document->id,
                 'punchlist.revision_uploaded',
-                "Punchlist revision PDF uploaded by {$user->name}",
+                "Punchlist revision PDF uploaded by {$user->name}" . ($isAdmin ? '' : ' (Subcon — awaiting L1 review)'),
                 [],
                 $user->id,
             );
         });
 
-        \App\Jobs\NotifyPunchlistRevisedJob::dispatch($document->fresh());
+        if ($isAdmin) {
+            NotifyAdminsJob::dispatch($document->fresh(), 'routing_needed');
+        } else {
+            NotifyAdminsJob::dispatch($document->fresh(), 'submission');
+        }
 
         return redirect()->route('documents.show', $document->id)
-            ->with('success', 'Punchlist revision uploaded. Approvers have been notified.');
+            ->with('success', $isAdmin
+                ? 'Punchlist revision uploaded. Please complete signature placement next.'
+                : 'Punchlist revision uploaded. Admin will review it before placement.');
     }
 
     // POST /documents/{id}/reassign
@@ -742,24 +844,18 @@ class DocumentController extends Controller
                 ->with('status', 'Draft saved.');
         }
 
-        // For rejected documents, determine which level to resume from.
+        // For rejected documents, record which level rejected it (for audit/status-code
+        // flavor only — the approval chain itself always restarts from L1 regardless).
         // Rejection codes follow level_order * 3 - 1 (02=L1, 05=L2, 08=L3, 11=L4).
         $rejectionLevel = null;
         if ($isRejected) {
             $rejectionLevel = (int) (((int) ltrim($document->status_code, '0') + 1) / 3);
         }
 
-        // A Partner-submitted revision of a rejected document must be reviewed (and its
-        // signature placement redone) by an Admin before the rejected level is reactivated —
-        // placement is Admin-only, so the Partner can no longer do that step themselves.
-        // An Admin revising their own rejected document still resumes immediately, unchanged.
-        $deferActivation = $isRejected && ! $isAdmin;
-
         return $this->finalizeSubmission(
             $document, $validated, $user, $isAdmin,
             $isRejected, $rejectionLevel,
             $pdfPath, $previousPdfPath, $pdfChanged, $templateChanged,
-            $deferActivation,
         );
     }
 
@@ -826,11 +922,10 @@ class DocumentController extends Controller
         ?string $previousPdfPath,
         bool $pdfChanged,
         bool $templateChanged,
-        bool $deferActivation = false,
     ): RedirectResponse {
         $nextActiveStep = null;
 
-        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, $deferActivation, &$nextActiveStep) {
+        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, &$nextActiveStep) {
             $template = Template::with('levels')->findOrFail($validated['template_id']);
 
             // Placement only needs to be redone if the PDF or the approval template changed;
@@ -870,22 +965,13 @@ class DocumentController extends Controller
 
             $document->update($updateData);
 
-            // Rebuild approval steps.
-            // When resuming from a rejection level, levels before it are auto-approved
-            // so the flow continues from where it was rejected.
-            // Capture the outgoing steps first — levels re-carried as auto-approved must
-            // keep their original signature/timestamp, or the visual signature stamp on
-            // the generated PDF silently disappears for approvals made before the rejection.
-            $previousSteps = $document->approvalSteps()->get()->keyBy('level_order');
-
+            // Rebuild approval steps from scratch. BR: a rejection anywhere in the chain
+            // restarts the WHOLE approval flow from L1 — no level is auto-carried as
+            // already-approved, every approver must review the revised document themselves,
+            // whether the rejection happened at L1 or L4.
             $document->approvalSteps()->delete();
             foreach ($template->levels as $level) {
-                $n            = $level->level_order;
-                $autoApproved = $rejectionLevel !== null && $n < $rejectionLevel;
-                $isActive     = $rejectionLevel !== null
-                    ? ($n === $rejectionLevel && ! $deferActivation)
-                    : $n === 1;
-                $previous     = $previousSteps->get($n);
+                $n = $level->level_order;
 
                 ApprovalStep::create([
                     'document_id'        => $document->id,
@@ -893,48 +979,25 @@ class DocumentController extends Controller
                     'role'               => $level->role,
                     'requires_signature' => $level->requires_signature,
                     'approver_id'        => $n === 1 ? null : ($pics[$n] ?? null),
-                    'status'             => $autoApproved ? ($previous->status ?? 'approved') : 'pending',
-                    'action_at'          => $autoApproved ? ($previous->action_at ?? now()) : null,
-                    'signature_id'       => $autoApproved ? $previous?->signature_id : null,
-                    'punchlist_notes'    => $autoApproved ? $previous?->punchlist_notes : null,
-                    'is_active'          => $isActive,
+                    'status'             => 'pending',
+                    'is_active'          => false,
                 ]);
             }
 
             AuditService::log(
                 $document->id,
                 'document.submitted',
-                "Draft submitted by {$user->name}",
-                [],
+                $rejectionLevel !== null
+                    ? "Revision resubmitted by {$user->name}. Previously rejected at L{$rejectionLevel} — full approval restarts from L1."
+                    : "Draft submitted by {$user->name}",
+                $rejectionLevel !== null ? ['previously_rejected_level' => $rejectionLevel] : [],
                 $user->id,
             );
 
-            if ($rejectionLevel !== null) {
-                // Resume from the rejected level. Rejection codes are level*3-1, so the
-                // "Done Rectification - On Review Ln" code that follows is level*3
-                // (e.g. L3 rejected = '08', revised/resuming = '09').
-                $pendingCode = str_pad($rejectionLevel * 3, 2, '0', STR_PAD_LEFT);
-
-                $document->update([
-                    'status_code'              => $pendingCode,
-                    'revision_pending_review'  => $deferActivation,
-                ]);
-
-                $nextActiveStep = ApprovalStep::where('document_id', $document->id)
-                    ->where('level_order', $rejectionLevel)
-                    ->first();
-
-                AuditService::log(
-                    $document->id,
-                    'document.revision_resubmitted',
-                    $deferActivation
-                        ? "Revision resubmitted by {$user->name}. Awaiting Admin review before resuming L{$rejectionLevel}."
-                        : "Revision resubmitted by {$user->name}. Resuming from L{$rejectionLevel}.",
-                    ['resumed_from_level' => $rejectionLevel],
-                    $user->id,
-                );
-            } elseif ($isAdmin) {
-                // Normal admin submit — auto-approve L1 and activate L2.
+            if ($isAdmin) {
+                // Admin submit/resubmit: auto-approve L1, activate L2. Status code uses the
+                // "Done Rectification" flavor ('06') when restarting after a rejection,
+                // otherwise the first-time code ('04').
                 ApprovalStep::where('document_id', $document->id)
                     ->where('level_order', 1)
                     ->update(['status' => 'approved', 'action_at' => now(), 'is_active' => false]);
@@ -947,7 +1010,7 @@ class DocumentController extends Controller
                     $nextActiveStep->update(['is_active' => true]);
                 }
 
-                $document->update(['status_code' => '04']);
+                $document->update(['status_code' => $rejectionLevel !== null ? '06' : '04']);
 
                 AuditService::log(
                     $document->id,
@@ -956,19 +1019,22 @@ class DocumentController extends Controller
                     ['level' => 1],
                     null,
                 );
+            } else {
+                // Partner submit/resubmit: L1 must genuinely review it — same L1 gate whether
+                // this is a first-time submission or a restart after a rejection at any level.
+                ApprovalStep::where('document_id', $document->id)
+                    ->where('level_order', 1)
+                    ->update(['is_active' => true]);
+
+                $nextActiveStep = ApprovalStep::where('document_id', $document->id)
+                    ->where('level_order', 1)
+                    ->first();
+
+                $document->update(['status_code' => $rejectionLevel !== null ? '03' : '01']);
             }
         });
 
-        if ($rejectionLevel !== null) {
-            if ($deferActivation) {
-                // Partner-submitted revision: Admin must review + redo placement before
-                // the rejected level is reactivated and its approver notified.
-                NotifyAdminsJob::dispatch($document->fresh(), 'revision_needs_review');
-            } elseif ($nextActiveStep) {
-                // Admin-submitted revision resumes immediately — notify the approver.
-                NotifyApproverTurnJob::dispatch($document->fresh(), $nextActiveStep);
-            }
-        } elseif ($isAdmin) {
+        if ($isAdmin) {
             NotifyAdminsJob::dispatch($document, 'approved');
             if ($nextActiveStep) {
                 NotifyApproverTurnJob::dispatch($document->fresh(), $nextActiveStep);
@@ -978,10 +1044,10 @@ class DocumentController extends Controller
         }
 
         $flash = match (true) {
-            $deferActivation          => 'Revision submitted. Waiting for Admin review before approval resumes.',
-            $rejectionLevel !== null  => "Revision resubmitted. Resumed from L{$rejectionLevel} approval.",
-            $isAdmin                  => 'Document submitted and L1 auto-approved.',
-            default                   => 'Document submitted successfully.',
+            $rejectionLevel !== null && $isAdmin => 'Revision resubmitted. L1 auto-approved — full approval restarts from L2.',
+            $rejectionLevel !== null             => 'Revision resubmitted. Waiting for Admin (L1) review — full approval restarts from L1.',
+            $isAdmin                              => 'Document submitted and L1 auto-approved.',
+            default                                => 'Document submitted successfully.',
         };
 
         return redirect()->route('documents.show', $document->id)
@@ -994,14 +1060,15 @@ class DocumentController extends Controller
         abort_if(! in_array($request->user()->role, self::ADMIN_ROLES), 403);
 
         $templates = Template::where('status', 'active')
-            ->with('levels')
+            ->with(['levels', 'defaultCluster'])
             ->orderBy('name')
             ->get()
             ->map(fn (Template $t) => [
-                'id'           => $t->id,
-                'name'         => $t->name,
-                'sow_code'     => $t->sow_code,
-                'levels_count' => $t->levels->count(),
+                'id'              => $t->id,
+                'name'            => $t->name,
+                'sow_code'        => $t->sow_code,
+                'levels_count'    => $t->levels->count(),
+                'default_cluster' => $t->defaultCluster?->display_name,
             ]);
 
         $partners = Partner::where('status', 'active')
@@ -1026,12 +1093,12 @@ class DocumentController extends Controller
 
         // ── 1. Basic validation ──────────────────────────────────────────────
         $validated = $request->validate([
-            'unique_id'               => ['required', 'string', 'max:20', 'unique:documents,unique_id'],
+            'unique_id'               => ['required', 'string', 'max:50', 'unique:documents,unique_id'],
             'vendor_contractor'      => ['required', 'string', 'max:200'],
-            'pt_index'               => ['required', 'string', 'max:100'],
-            'project_code'           => ['nullable', 'string', 'max:100'],
-            'link_id'                => ['nullable', 'string', 'max:100'],
-            'link_name'              => ['nullable', 'string', 'max:200'],
+            'pt_index'               => ['required', 'string', 'max:100', 'unique:documents,pt_index'],
+            'project_code'           => ['required', 'string', 'max:100'],
+            'link_id'                => ['required', 'string', 'max:100'],
+            'link_name'              => ['required', 'string', 'max:200'],
             'cluster_zone'           => ['required', 'string', 'max:255', Rule::exists('clusters', 'display_name')->where('status', 'active')],
             'template_id'            => ['required', 'uuid', Rule::exists('templates', 'id')->where('status', 'active')],
             'partner_id'             => ['required', 'uuid', 'exists:partners,id'],
@@ -1048,6 +1115,10 @@ class DocumentController extends Controller
             'unique_id.unique'           => 'This Unique ID is already in use — please choose another one.',
             'vendor_contractor.required' => 'Vendor/Contractor is required.',
             'pt_index.required'          => 'PT Index is required.',
+            'pt_index.unique'            => 'This PT Index is already in use — please choose another one.',
+            'project_code.required'      => 'Project Code is required.',
+            'link_id.required'           => 'Link ID is required.',
+            'link_name.required'         => 'Link Name is required.',
             'cluster_zone.required'      => 'Cluster Zone is required.',
             'cluster_zone.exists'        => 'Please select a valid, active cluster.',
             'template_id.required'       => 'Please select a SOW template.',
@@ -1300,12 +1371,24 @@ class DocumentController extends Controller
 
         $validated = $request->validate($rules, $messages);
 
-        $l2Step = null;
+        // A punchlist revision's placement (both Admin-direct and post-L1-gate Subcon
+        // paths) always arrives here at status '14' with no pending L2+ step, since
+        // those levels are frozen from the original approval chain — no other caller
+        // reaches this endpoint in that state, so it's an unambiguous signal.
+        $isPunchlistPlacement = $document->status_code === '14';
 
-        DB::transaction(function () use ($request, $user, $document, $validated, &$l2Step) {
-            // Activate L2 (approver_id was already assigned when L1 was approved)
-            $l2Step = $document->approvalSteps->firstWhere('level_order', 2);
-            $l2Step?->update(['is_active' => true]);
+        $targetStep = null;
+
+        DB::transaction(function () use ($request, $user, $document, $validated, $isPunchlistPlacement, &$targetStep) {
+            // Activate the next pending level (approver_id was already assigned when L1
+            // was approved). This is L2 for a first-time routing, or whichever level is
+            // resuming after a Partner's revision of a rejected document — found generically
+            // rather than hardcoded, since both cases share this same "finish placement" step.
+            $targetStep = $document->approvalSteps
+                ->where('level_order', '>', 1)
+                ->sortBy('level_order')
+                ->firstWhere('status', 'pending');
+            $targetStep?->update(['is_active' => true]);
 
             // Placement
             $snapshot = $document->template_snapshot;
@@ -1331,10 +1414,25 @@ class DocumentController extends Controller
                 $excelReplaced = true;
             }
 
-            $document->update([
+            $updateData = [
                 'template_snapshot' => $snapshot,
                 'routing_pending'   => false,
-            ]);
+            ];
+
+            if ($isPunchlistPlacement) {
+                $updateData['status_code'] = '15';
+
+                // Reset every flagging approver's verification (including anyone who
+                // already verified or rejected a previous round) so this fresh revision
+                // is reviewed from scratch by all of them.
+                $document->punchlistVerifications()->update([
+                    'status'      => 'pending',
+                    'verified_at' => null,
+                    'notes'       => null,
+                ]);
+            }
+
+            $document->update($updateData);
 
             AuditService::log(
                 $document->id,
@@ -1345,137 +1443,34 @@ class DocumentController extends Controller
             );
         });
 
-        if ($l2Step) {
-            NotifyApproverTurnJob::dispatch($document->fresh(), $l2Step->fresh());
+        if ($isPunchlistPlacement) {
+            \App\Jobs\NotifyPunchlistRevisedJob::dispatch($document->fresh());
+        } elseif ($targetStep) {
+            NotifyApproverTurnJob::dispatch($document->fresh(), $targetStep->fresh());
         }
 
         return redirect()->route('documents.show', $document->id)
-            ->with('status', 'Routing completed. L2 approver has been notified.');
+            ->with('status', $isPunchlistPlacement
+                ? 'Placement completed. Punchlist verifiers have been notified.'
+                : "Routing completed. L{$targetStep?->level_order} approver has been notified.");
     }
 
-    // POST /documents/{id}/review-revision — Admin approves or rejects a Partner-submitted
-    // revision of a rejected document, before its signature placement is redone. Mirrors the
-    // "L1 approve -> routing_pending" shape: a single explicit decision, then a redirect to the
-    // placement step (on approve) or back to the Partner for another revision (on reject).
-    public function reviewRevision(Request $request, string $id): RedirectResponse
+    // GET /api/documents/check-duplicate?field=unique_id|pt_index&value=X&ignore_id=uuid
+    // Lets the create/edit form warn the user about a duplicate before they submit,
+    // instead of only finding out from the form's error response after posting.
+    public function checkDuplicate(Request $request): JsonResponse
     {
-        $user     = $request->user();
-        $document = Document::with('approvalSteps')->findOrFail($id);
-
-        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
-        abort_if(! $document->revision_pending_review, 422, 'This document has no revision awaiting review.');
-
         $validated = $request->validate([
-            'action' => ['required', 'in:approve,reject'],
-            'reason' => ['required_if:action,reject', 'nullable', 'string', 'max:2000'],
+            'field'     => ['required', 'string', Rule::in(['unique_id', 'pt_index'])],
+            'value'     => ['required', 'string'],
+            'ignore_id' => ['nullable', 'uuid'],
         ]);
 
-        $level = $document->previous_pdf_rejected_level;
+        $exists = Document::where($validated['field'], $validated['value'])
+            ->when($validated['ignore_id'] ?? null, fn ($q, $ignoreId) => $q->where('id', '!=', $ignoreId))
+            ->exists();
 
-        if ($validated['action'] === 'approve') {
-            $document->update([
-                'revision_pending_review'    => false,
-                'revision_placement_pending' => true,
-            ]);
-
-            AuditService::log(
-                $document->id,
-                'document.revision_approved',
-                "Revision approved by {$user->name}. Awaiting signature placement.",
-                ['level' => $level],
-                $user->id,
-            );
-
-            return redirect()->route('documents.show', $document->id)
-                ->with('status', 'Revision approved. Please complete the signature placement.');
-        }
-
-        // Reject: send back to the Partner for another revision.
-        $rejectionCode = str_pad($level * 3 - 1, 2, '0', STR_PAD_LEFT);
-
-        DB::transaction(function () use ($document, $level, $rejectionCode, $validated, $user) {
-            $document->update([
-                'status_code'              => $rejectionCode,
-                'revision_pending_review'  => false,
-            ]);
-
-            $document->approvalSteps()
-                ->where('level_order', $level)
-                ->update([
-                    'status'      => 'rejected',
-                    'reject_reason' => $validated['reason'],
-                    'action_at'   => now(),
-                ]);
-
-            AuditService::log(
-                $document->id,
-                'document.revision_rejected_by_admin',
-                "Revision rejected by {$user->name}: {$validated['reason']}",
-                ['level' => $level],
-                $user->id,
-            );
-        });
-
-        NotifyPartnerJob::dispatch($document->fresh(), 'revision_rejected_by_admin');
-
-        return redirect()->route('documents.show', $document->id)
-            ->with('status', 'Revision rejected. The Partner has been notified to resubmit.');
-    }
-
-    // POST /documents/{id}/finalize-revision-placement — Admin places the signature boxes on
-    // the newly-approved revision PDF, then reactivates the rejected level so its approver can
-    // resume review. Not implemented via completeRouting() because that endpoint hardcodes
-    // level_order=2 (first-time routing); here the level to reactivate varies (L1-L4).
-    public function finalizeRevisionPlacement(Request $request, string $id): RedirectResponse
-    {
-        $user     = $request->user();
-        $document = Document::with('approvalSteps')->findOrFail($id);
-
-        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
-        abort_if(! $document->revision_placement_pending, 422, 'This document is not awaiting placement.');
-
-        $validated = $request->validate([
-            'positions'          => ['required', 'array'],
-            'positions.*.page'   => ['required', 'integer', 'min:1'],
-            'positions.*.x'      => ['required', 'numeric'],
-            'positions.*.y'      => ['required', 'numeric'],
-            'positions.*.width'  => ['required', 'numeric', 'min:1'],
-            'positions.*.height' => ['required', 'numeric', 'min:1'],
-        ]);
-
-        $level = $document->previous_pdf_rejected_level;
-        $step  = null;
-
-        DB::transaction(function () use ($document, $validated, $user, $level, &$step) {
-            $snapshot = $document->template_snapshot;
-            $snapshot['placement'] = [
-                'status'    => 'manual',
-                'positions' => $validated['positions'],
-            ];
-
-            $document->update([
-                'template_snapshot'           => $snapshot,
-                'revision_placement_pending'  => false,
-            ]);
-
-            $step = $document->approvalSteps->firstWhere('level_order', $level);
-            $step?->update(['is_active' => true]);
-
-            AuditService::log(
-                $document->id,
-                'document.revision_placement_completed',
-                "Signature placement completed by {$user->name}. Resuming L{$level} review.",
-                ['level' => $level],
-                $user->id,
-            );
-        });
-
-        if ($step) {
-            NotifyApproverTurnJob::dispatch($document->fresh(), $step->fresh());
-        }
-
-        return redirect()->route('documents.show', $document->id)
-            ->with('status', "Placement completed. L{$level} approver has been notified.");
+        return response()->json(['duplicate' => $exists]);
     }
 
     // ──────────────────────────────────────────────
@@ -1487,17 +1482,19 @@ class DocumentController extends Controller
         $requirePdf = $requirePdf ?? ! $isDraft;
 
         $uniqueIdRule = Rule::unique('documents', 'unique_id');
+        $ptIndexRule  = Rule::unique('documents', 'pt_index');
         if ($ignoreDocumentId) {
             $uniqueIdRule = $uniqueIdRule->ignore($ignoreDocumentId);
+            $ptIndexRule  = $ptIndexRule->ignore($ignoreDocumentId);
         }
 
         $rules = [
-            'unique_id'         => ['required', 'string', 'max:20', $uniqueIdRule],
+            'unique_id'         => ['required', 'string', 'max:50', $uniqueIdRule],
             'vendor_contractor' => ['required', 'string', 'max:200'],
-            'pt_index'          => ['required', 'string', 'max:100'],
-            'project_code'      => ['nullable', 'string', 'max:100'],
-            'link_id'           => ['nullable', 'string', 'max:100'],
-            'link_name'         => ['nullable', 'string', 'max:200'],
+            'pt_index'          => ['required', 'string', 'max:100', $ptIndexRule],
+            'project_code'      => ['required', 'string', 'max:100'],
+            'link_id'           => ['required', 'string', 'max:100'],
+            'link_name'         => ['required', 'string', 'max:200'],
             'cluster_zone'      => ['required', 'string', 'max:255', Rule::exists('clusters', 'display_name')->where('status', 'active')],
             'template_id'       => ['required', 'uuid', Rule::exists('templates', 'id')->where('status', 'active')],
             'pdf_file'          => [$requirePdf ? 'required' : 'nullable', 'file', 'mimes:pdf', 'max:20480'],
@@ -1515,6 +1512,10 @@ class DocumentController extends Controller
             'unique_id.required'         => 'Unique ID is required.',
             'unique_id.unique'           => 'This Unique ID is already in use — please choose another one.',
             'pt_index.required'          => 'PT Index is required.',
+            'pt_index.unique'            => 'This PT Index is already in use — please choose another one.',
+            'project_code.required'      => 'Project Code is required.',
+            'link_id.required'           => 'Link ID is required.',
+            'link_name.required'         => 'Link Name is required.',
             'cluster_zone.required'      => 'Cluster Zone is required.',
             'cluster_zone.exists'        => 'Please select a valid, active cluster.',
             'template_id.required'       => 'Please select a SOW template.',

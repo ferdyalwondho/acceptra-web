@@ -133,6 +133,7 @@ export interface TemplateDetail {
   sow_code: string | null;
   description: string | null;
   status: 'active' | 'inactive';
+  default_cluster_id: string | null;
   levels: TemplateLevelRecord[];
 }
 
@@ -148,6 +149,7 @@ export interface TemplateOption {
   name: string;
   sow_code: string | null;
   levels_count: number;
+  default_cluster: string | null;
 }
 
 export interface TemplateLevelOption {
@@ -198,6 +200,20 @@ export interface ApprovalStepRecord {
   action_at: string | null;
   reject_reason: string | null;
   punchlist_notes: string | null;
+  evidence_path: string | null;
+  evidence_original_filename: string | null;
+}
+
+export interface PunchlistVerificationRecord {
+  id: string;
+  approval_step_id: string;
+  approver_id: string;
+  approver_name: string | null;
+  status: 'pending' | 'verified' | 'rejected';
+  verified_at: string | null;
+  notes: string | null;
+  evidence_path: string | null;
+  evidence_original_filename: string | null;
 }
 
 export interface ExcelAttachment {
@@ -225,6 +241,16 @@ export interface AdminMetrics {
   need_revision: number;
   completed: number;
   overdue_count: number;
+}
+
+// Per-approval-step status breakdown — shared by Dashboard/Admin (global) and
+// Dashboard/Approver (scoped to the logged-in approver).
+export interface ApprovalStatusCounts {
+  pending: number;
+  approved: number;
+  punchlist_pending: number;
+  rejected_pending: number;
+  atp_done: number;
 }
 
 export interface ActiveDoc {
@@ -319,9 +345,7 @@ export interface DocumentRecord {
   sow_name: string;
   status_code: string;
   routing_pending: boolean;
-  revision_pending_review: boolean;
-  revision_placement_pending: boolean;
-  previous_pdf_rejected_level: number | null;
+  is_imported: boolean;
   date_atp_submission: string | null;
   original_pdf_path: string | null;
   template_snapshot: TemplateSnapshot;
@@ -329,6 +353,7 @@ export interface DocumentRecord {
   submitter: { id: string; name: string } | null;
   created_at: string;
   approval_steps: ApprovalStepRecord[];
+  punchlist_verifications: PunchlistVerificationRecord[];
   excel_attachment: ExcelAttachment | null;
   atp_punchlist: string | null;
 }

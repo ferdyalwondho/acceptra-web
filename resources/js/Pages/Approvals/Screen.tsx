@@ -9,8 +9,40 @@ import { cn } from '@/lib/utils';
 import type { ExcelAttachment } from '@/types';
 import {
   Download, FileText, FileSpreadsheet, CheckCircle2, ClipboardList,
-  XCircle, ArrowLeft, Users, AlertTriangle, Clock,
+  XCircle, ArrowLeft, Users, AlertTriangle, Clock, Paperclip, X,
 } from 'lucide-react';
+
+const REASON_EXAMPLE_HINT = 'contoh alasan : 2.1.2.1 Power Cable belum di connect,\n2.1.2.16 : ODU tidak terpasang grounding';
+
+function EvidenceUploadField({ file, onChange }: { file: File | null; onChange: (f: File | null) => void }) {
+  return (
+    <div className="mt-3">
+      <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+        Evidence <span className="text-danger">*</span>
+      </label>
+      {file ? (
+        <div className="flex h-9 items-center gap-2 rounded-sm border border-[var(--color-border-strong)] bg-white px-3">
+          <Paperclip className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
+          <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">{file.name}</span>
+          <button type="button" onClick={() => onChange(null)} className="shrink-0 text-[var(--color-text-secondary)] hover:text-danger">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <label className="flex h-9 cursor-pointer items-center gap-2 rounded-sm border border-dashed border-[var(--color-border-strong)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-brand hover:text-brand-ink">
+          <Paperclip className="h-3.5 w-3.5 shrink-0" />
+          <span>Upload bukti (PDF/JPG/PNG)</span>
+          <input
+            type="file"
+            accept="application/pdf,image/jpeg,image/png"
+            className="sr-only"
+            onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+          />
+        </label>
+      )}
+    </div>
+  );
+}
 
 type ActionType = 'approve' | 'punchlist' | 'reject';
 type FlowStep   = 'pick-action' | 'signature' | 'done';
@@ -81,6 +113,9 @@ export default function ApprovalScreen({
   const [punchlistNote, setPunchlistNote] = useState('');
   const [rejectNote,    setRejectNote]    = useState('');
   const [verifyNote,    setVerifyNote]    = useState('');
+  const [punchlistEvidence, setPunchlistEvidence] = useState<File | null>(null);
+  const [rejectEvidence,    setRejectEvidence]    = useState<File | null>(null);
+  const [verifyEvidence,    setVerifyEvidence]    = useState<File | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [flowStep,      setFlowStep]      = useState<FlowStep>('pick-action');
   const [submitting,    setSubmitting]    = useState(false);
@@ -93,35 +128,42 @@ export default function ApprovalScreen({
 
   function submitApprove(signatureId?: string | null, signatureData?: string | null) {
     if (submitting) return;
+    if (action === 'punchlist' && ! punchlistEvidence) return;
     setSubmitting(true);
     router.post(`/documents/${doc.id}/approve`, {
       action:          action === 'punchlist' ? 'approve_with_punchlist' : 'approve',
       punchlist_notes: punchlistNote,
+      evidence_file:   action === 'punchlist' ? punchlistEvidence : null,
       signature_id:    signatureId ?? user_signature_id ?? null,
       signature_data:  signatureData ?? null,
     }, {
+      forceFormData: true,
       onFinish: () => setSubmitting(false),
     });
   }
 
   function submitReject() {
-    if (submitting || ! rejectNote.trim()) return;
+    if (submitting || ! rejectNote.trim() || ! rejectEvidence) return;
     setSubmitting(true);
     router.post(`/documents/${doc.id}/reject`, {
       reject_reason: rejectNote,
+      evidence_file: rejectEvidence,
     }, {
+      forceFormData: true,
       onFinish: () => setSubmitting(false),
     });
   }
 
   function submitVerify(verifyAction: 'verify' | 'reject') {
     if (submitting) return;
-    if (verifyAction === 'reject' && ! verifyNote.trim()) return;
+    if (verifyAction === 'reject' && (! verifyNote.trim() || ! verifyEvidence)) return;
     setSubmitting(true);
     router.post(`/documents/${doc.id}/verify`, {
       action: verifyAction,
       notes:  verifyNote,
+      evidence_file: verifyAction === 'reject' ? verifyEvidence : null,
     }, {
+      forceFormData: true,
       onFinish: () => setSubmitting(false),
     });
   }
@@ -140,6 +182,8 @@ export default function ApprovalScreen({
     setFlowStep('pick-action');
     setPunchlistNote('');
     setRejectNote('');
+    setPunchlistEvidence(null);
+    setRejectEvidence(null);
   }
 
   /* ── Verify Mode Panel ── */
@@ -207,7 +251,7 @@ export default function ApprovalScreen({
           className={cn(btnBase, 'bg-brand-ink text-white hover:bg-brand-hover')}
         >
           <CheckCircle2 className="h-4 w-4" />
-          {submitting ? 'Memproses…' : 'Verify / Accept Revision'}
+          {submitting ? 'Memproses…' : 'Pass'}
         </button>
 
         <button
@@ -215,7 +259,7 @@ export default function ApprovalScreen({
           onClick={() => setShowRejectModal(true)}
           className={cn(btnBase, 'border border-danger/30 text-danger hover:bg-danger-surface')}
         >
-          <XCircle className="h-4 w-4" /> Reject Revision
+          <XCircle className="h-4 w-4" /> Fail
         </button>
       </div>
 
@@ -241,6 +285,8 @@ export default function ApprovalScreen({
               placeholder="Tuliskan alasan penolakan revisi…"
               className="w-full resize-none rounded-sm border border-danger/40 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
             />
+            <p className="mt-1.5 whitespace-pre-line text-xs text-[var(--color-text-secondary)]">{REASON_EXAMPLE_HINT}</p>
+            <EvidenceUploadField file={verifyEvidence} onChange={setVerifyEvidence} />
             <div className="mt-4 flex justify-end gap-3">
               <button
                 onClick={() => setShowRejectModal(false)}
@@ -249,7 +295,7 @@ export default function ApprovalScreen({
                 Batal
               </button>
               <button
-                disabled={! verifyNote.trim() || submitting}
+                disabled={! verifyNote.trim() || ! verifyEvidence || submitting}
                 onClick={() => { setShowRejectModal(false); submitVerify('reject'); }}
                 className="h-9 rounded-md bg-danger px-4 text-sm font-semibold text-white hover:bg-danger/90 disabled:opacity-50"
               >
@@ -335,7 +381,7 @@ export default function ApprovalScreen({
             className={cn(btnBase, 'bg-brand-ink text-white hover:bg-brand-hover')}
           >
             <CheckCircle2 className="h-4 w-4" />
-            {submitting && action === 'approve' ? 'Memproses…' : 'Approve'}
+            {submitting && action === 'approve' ? 'Memproses…' : 'Pass'}
           </button>
 
           <button
@@ -347,7 +393,7 @@ export default function ApprovalScreen({
               action === 'punchlist' && 'ring-2 ring-warning/30',
             )}
           >
-            <ClipboardList className="h-4 w-4" /> Approve with Punchlist
+            <ClipboardList className="h-4 w-4" /> Pass with Punchlist
           </button>
 
           <button
@@ -374,8 +420,10 @@ export default function ApprovalScreen({
                 placeholder="Tuliskan temuan / catatan perbaikan…"
                 className="w-full resize-none rounded-sm border border-warning/40 bg-white px-3 py-2 text-sm transition-colors focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
               />
+              <p className="mt-1.5 whitespace-pre-line text-xs text-[var(--color-text-secondary)]">{REASON_EXAMPLE_HINT}</p>
+              <EvidenceUploadField file={punchlistEvidence} onChange={setPunchlistEvidence} />
               <button
-                disabled={! punchlistNote.trim() || submitting}
+                disabled={! punchlistNote.trim() || ! punchlistEvidence || submitting}
                 onClick={() => {
                   if (doc.requiresSignature) {
                     setFlowStep('signature');
@@ -402,8 +450,10 @@ export default function ApprovalScreen({
                 placeholder="Tuliskan alasan penolakan…"
                 className="w-full resize-none rounded-sm border border-danger/40 bg-white px-3 py-2 text-sm transition-colors focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
               />
+              <p className="mt-1.5 whitespace-pre-line text-xs text-[var(--color-text-secondary)]">{REASON_EXAMPLE_HINT}</p>
+              <EvidenceUploadField file={rejectEvidence} onChange={setRejectEvidence} />
               <button
-                disabled={! rejectNote.trim() || submitting}
+                disabled={! rejectNote.trim() || ! rejectEvidence || submitting}
                 onClick={submitReject}
                 className="mt-3 h-9 w-full rounded-md bg-danger text-sm font-semibold text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-50"
               >
@@ -514,33 +564,24 @@ export default function ApprovalScreen({
       </div>
 
       {isVerifyingWithRevision ? (
-        // Verify mode: the revised PDF is what needs review, so it's the one embedded —
-        // the original just becomes a labeled download-only box below.
-        <div className="flex flex-1 flex-col gap-2">
-          {pdf_url && (
-            <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2">
-              <FileText className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]" />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium text-[var(--color-text-primary)]">PDF Utama</p>
-                <p className="text-[11px] text-[var(--color-text-secondary)]">
-                  Dokumen asli sebelum revisi punchlist — belum berubah.
-                </p>
+        // Verify mode: same dual side-by-side layout as the reject-flow's L1 gate below —
+        // the pre-revision PDF on the left, the punchlist revision on the right.
+        <div className={cn('grid flex-1 gap-4', previous_pdf_url ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1')}>
+          {previous_pdf_url && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 rounded-md bg-[var(--color-bg-subtle)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)]">
+                <FileText className="h-3.5 w-3.5" /> PDF Utama (Sebelum Revisi)
               </div>
-              <a
-                href={pdf_url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex shrink-0 h-7 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
-              >
-                <Download className="h-3.5 w-3.5" /> Download
-              </a>
+              <PdfViewer url={previous_pdf_url} placements={null} className="flex-1" />
             </div>
           )}
-          <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
-            <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Punchlist
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
+              <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Punchlist
+            </div>
+            {revisionPdfMeta}
+            <PdfViewer url={punchlist_revision_pdf!.url} placements={null} className="flex-1" />
           </div>
-          {revisionPdfMeta}
-          <PdfViewer url={punchlist_revision_pdf!.url} placements={null} className="flex-1" />
         </div>
       ) : (
         // PDF Viewer — dual view saat ada PDF yang direject sebelumnya di level ini

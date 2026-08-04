@@ -81,6 +81,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/{id}',           [DocumentController::class, 'show'])->name('documents.show');
     Route::get('/documents/{id}/edit',      [DocumentController::class, 'edit'])->name('documents.edit');
     Route::put('/documents/{id}',           fn () => redirect()->back())->name('documents.update');
+    Route::delete('/documents/{id}',        [DocumentController::class, 'destroy'])->name('documents.destroy');
     Route::get('/documents/{id}/audit', function (string $id) {
         return redirect()->route('documents.show', ['id' => $id, 'tab' => 'audit-trail']);
     })->name('documents.audit');
@@ -117,8 +118,6 @@ Route::middleware('auth')->group(function () {
     Route::post('/documents/{id}/punchlist-revision',  [DocumentController::class, 'uploadPunchlistRevision'])->name('documents.punchlist-revision');
     Route::post('/documents/{id}/placement',[DocumentController::class, 'placement'])->name('documents.placement');
     Route::post('/documents/{id}/complete-routing', [DocumentController::class, 'completeRouting'])->name('documents.complete-routing');
-    Route::post('/documents/{id}/review-revision', [DocumentController::class, 'reviewRevision'])->name('documents.review-revision');
-    Route::post('/documents/{id}/finalize-revision-placement', [DocumentController::class, 'finalizeRevisionPlacement'])->name('documents.finalize-revision-placement');
 
     // FR-ATT: Lampiran Excel — download & delete
     Route::get('/documents/{id}/attachments/{att_id}/download',
@@ -129,6 +128,9 @@ Route::middleware('auth')->group(function () {
     // FR-SUB API: fetch template level structure for PIC slot population
     Route::get('/api/templates/{id}/levels', [TemplateController::class, 'levels'])->name('api.templates.levels');
 
+    // Live duplicate check for unique_id / pt_index before the user submits the form
+    Route::get('/api/documents/check-duplicate', [DocumentController::class, 'checkDuplicate'])->name('api.documents.check-duplicate');
+
     /* ── Approvals ── */
     Route::get('/approvals',         [ApprovalController::class, 'index'])->name('approvals.index');
     Route::get('/approvals/history', [ApprovalController::class, 'history'])->name('approvals.history');
@@ -136,6 +138,10 @@ Route::middleware('auth')->group(function () {
     Route::post('/documents/{id}/approve',  [ApprovalController::class, 'approve'])->name('approvals.approve');
     Route::post('/documents/{id}/reject',   [ApprovalController::class, 'reject'])->name('approvals.reject');
     Route::post('/documents/{id}/verify',   [PunchlistController::class, 'verify'])->name('approvals.verify');
+    Route::get('/documents/{id}/approval-steps/{stepId}/evidence',
+        [ApprovalController::class, 'downloadEvidence'])->name('approvals.evidence');
+    Route::get('/documents/{id}/punchlist-verifications/{verificationId}/evidence',
+        [PunchlistController::class, 'downloadEvidence'])->name('approvals.verification-evidence');
 
     /* ── Partners (FR-PTR) ── */
     Route::get('/partners',            [PartnerController::class, 'index'])->name('partners.index');

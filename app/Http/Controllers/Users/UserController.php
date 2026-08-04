@@ -114,6 +114,10 @@ class UserController extends Controller
     {
         abort_if($request->user()->role !== 'super_admin', 403);
 
+        // Normalize before validating so the unique:users,email check compares against the
+        // same lowercase form the User::email() mutator stores (see FR-AUTH email case fix).
+        $request->merge(['email' => mb_strtolower(trim((string) $request->input('email')))]);
+
         $validated = $request->validate([
             'name'          => ['required', 'string', 'max:150'],
             'email'         => ['required', 'email', 'unique:users,email'],

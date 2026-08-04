@@ -106,6 +106,10 @@ class DashboardController extends Controller
                 'createdAt'         => $log->created_at->format('d M Y H:i'),
             ]);
 
+        // 4b. Approval-status breakdown — same per-approver-step categories as the
+        // Approver dashboard, but global (no approver_id filter) for system-wide overview.
+        $approvalStatus = $this->approvalStatusCounts(null);
+
         // 5. Approval stage breakdown — active docs per L-level
         $approvalStageBreakdown = [
             ['stage' => 'L1', 'count' => Document::whereIn('status_code', ['01', '02', '03'])->count()],
@@ -138,6 +142,7 @@ class DashboardController extends Controller
 
         return Inertia::render('Dashboard/Admin', [
             'metrics'                  => $metrics,
+            'approval_status'          => $approvalStatus,
             'active_documents'         => $activeDocuments,
             'overdue_approvals'        => $overdueApprovals,
             'recent_activity'          => $recentActivity,
@@ -238,12 +243,15 @@ class DashboardController extends Controller
         // Documents awaiting this user's punchlist verification — these have no active
         // ApprovalStep (the approval chain already finished), so they need their own
         // query or they silently never show up here (same gap fixed earlier for /approvals).
+        // A PunchlistVerification row stays 'pending' through both '14' (awaiting
+        // upload) and '15' (awaiting verification) — only '15' is actually actionable.
         $pendingPunchlistVerifications = Document::with([
                 'punchlistVerifications' => fn ($q) =>
                     $q->where('approver_id', $user->id)
                       ->where('status', 'pending'),
                 'punchlistVerifications.approvalStep',
             ])
+            ->where('status_code', '15')
             ->whereHas('punchlistVerifications', fn ($q) =>
                 $q->where('approver_id', $user->id)
                   ->where('status', 'pending')
@@ -273,43 +281,9 @@ class DashboardController extends Controller
                 'waitingSince' => $item['waitingSince']?->format('d M Y'),
             ]);
 
-        // Stats
-        $pendingCount = ApprovalStep::where('approver_id', $user->id)
-            ->where('is_active', true)
-            ->where('status', 'pending')
-            ->count();
-
-        $approvedCount = ApprovalStep::where('approver_id', $user->id)
-            ->whereIn('status', ['approved', 'offline_approved', 'skipped'])
-            ->count();
-
-        // Punchlist not yet revised = my PunchlistVerification still pending
-        $punchlistPendingCount = PunchlistVerification::where('approver_id', $user->id)
-            ->where('status', 'pending')
-            ->count();
-
-        // Rejected and document not yet revised by admin
-        $rejectedPendingCount = Document::whereHas('approvalSteps', fn ($q) =>
-                $q->where('approver_id', $user->id)->where('status', 'rejected')
-            )
-            ->whereIn('status_code', ['02', '05', '08', '11'])
-            ->count();
-
-        // ATP Done — documents I was involved in that reached final completion
-        $atpDoneCount = Document::whereHas('approvalSteps', fn ($q) =>
-                $q->where('approver_id', $user->id)
-                  ->whereIn('status', ['approved', 'approved_with_punchlist', 'offline_approved'])
-            )
-            ->whereIn('status_code', ['13', '16'])
-            ->count();
-
-        $stats = [
-            'pending'          => $pendingCount,
-            'approved'         => $approvedCount,
-            'punchlist_pending' => $punchlistPendingCount,
-            'rejected_pending'  => $rejectedPendingCount,
-            'atp_done'         => $atpDoneCount,
-        ];
+        // Stats — same per-approver-step categories as the Admin dashboard's global
+        // breakdown, but scoped to this specific approver.
+        $stats = $this->approvalStatusCounts($user->id);
 
         // 5 most recent steps this approver acted on
         $recentHistory = ApprovalStep::with('document')
@@ -335,6 +309,70 @@ class DashboardController extends Controller
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * Per-approval-step status breakdown: On Review (pending) / PASS (approved) /
+     * PASS with PL (punchlist pending verification) / Reject (rejected, not yet
+     * resubmitted) / ATP Done. Pass null for a system-wide (Admin) total, or a
+     * user id to scope it to that specific approver (Approver dashboard).
+     *
+     * @return array{pending: int, approved: int, punchlist_pending: int, rejected_pending: int, atp_done: int}
+     */
+    private function approvalStatusCounts(?string $approverId): array
+    {
+        $pending = ApprovalStep::where('is_active', true)
+            ->where('status', 'pending')
+            ->when($approverId, fn ($q) => $q->where('approver_id', $approverId))
+            ->count();
+
+        // A step stays 'approved_with_punchlist' forever once set — it only really
+        // becomes a "PASS" once its punchlist has actually been verified. Same
+        // supersede pattern as Approvals/History (ApprovalController.php:121-127):
+        // the PunchlistVerification row (created only once the whole approval chain
+        // finishes) is the source of truth for "verified", not the frozen step status.
+        $approved = ApprovalStep::when($approverId, fn ($q) => $q->where('approver_id', $approverId))
+            ->where(function ($q) {
+                $q->whereIn('status', ['approved', 'offline_approved', 'skipped'])
+                  ->orWhere(function ($q) {
+                      $q->where('status', 'approved_with_punchlist')
+                        ->whereHas('punchlistVerification', fn ($v) => $v->where('status', 'verified'));
+                  });
+            })
+            ->count();
+
+        // Approved with punchlist and not yet verified — this covers the whole time
+        // window from the moment this approver gives punchlist approval (even while
+        // the document is still awaited at a later level, before any
+        // PunchlistVerification row exists yet) through to it actually being verified.
+        $punchlistPending = ApprovalStep::where('status', 'approved_with_punchlist')
+            ->when($approverId, fn ($q) => $q->where('approver_id', $approverId))
+            ->whereDoesntHave('punchlistVerification', fn ($q) => $q->where('status', 'verified'))
+            ->count();
+
+        // Rejected and document not yet revised/resubmitted
+        $rejectedPending = Document::whereHas('approvalSteps', fn ($q) =>
+                $q->where('status', 'rejected')
+                  ->when($approverId, fn ($qq) => $qq->where('approver_id', $approverId))
+            )
+            ->whereIn('status_code', ['02', '05', '08', '11'])
+            ->count();
+
+        // ATP Done — documents that reached final completion
+        $atpDone = Document::whereHas('approvalSteps', fn ($q) =>
+                $q->whereIn('status', ['approved', 'approved_with_punchlist', 'offline_approved'])
+                  ->when($approverId, fn ($qq) => $qq->where('approver_id', $approverId))
+            )
+            ->whereIn('status_code', ['13', '16'])
+            ->count();
+
+        return [
+            'pending'           => $pending,
+            'approved'          => $approved,
+            'punchlist_pending' => $punchlistPending,
+            'rejected_pending'  => $rejectedPending,
+            'atp_done'          => $atpDone,
+        ];
+    }
 
     /**
      * Resolve the month/year to show the trend chart for, from request params,

@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import AppShell from '@/layouts/AppShell';
 import { ArrowLeft, Plus, Trash2, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { TemplateDetail, AvailableRole, PageProps } from '@/types';
+import type { TemplateDetail, AvailableRole, ClusterOption, PageProps } from '@/types';
 
 interface LevelRow {
   role: string;
@@ -16,6 +16,7 @@ interface FormData {
   name: string;
   sow_code: string;
   description: string;
+  default_cluster_id: string;
   status: 'active' | 'inactive';
   levels: LevelRow[];
 }
@@ -23,6 +24,7 @@ interface FormData {
 interface Props {
   template: TemplateDetail;
   available_roles: AvailableRole[];
+  clusters: ClusterOption[];
 }
 
 const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors';
@@ -30,7 +32,7 @@ const errorCls = 'mt-1 text-xs text-danger';
 
 const APPROVE_ONLY_ROLES = ['approver_ms_bo_team'];
 
-export default function TemplateEdit({ template, available_roles }: Props) {
+export default function TemplateEdit({ template, available_roles, clusters }: Props) {
   const { t } = useTranslation();
   const { flash } = usePage<PageProps>().props;
   const [flashMsg, setFlashMsg]       = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -48,10 +50,11 @@ export default function TemplateEdit({ template, available_roles }: Props) {
   }, [flashMsg]);
 
   const form = useForm<FormData>({
-    name:        template.name,
-    sow_code:    template.sow_code ?? '',
-    description: template.description ?? '',
-    status:      template.status,
+    name:                template.name,
+    sow_code:            template.sow_code ?? '',
+    description:         template.description ?? '',
+    default_cluster_id:  template.default_cluster_id ?? '',
+    status:              template.status,
     levels:      template.levels.map((l) => ({
       role:               l.role,
       requires_signature: l.requires_signature,
@@ -175,6 +178,26 @@ export default function TemplateEdit({ template, available_roles }: Props) {
                   onChange={(e) => form.setData('description', e.target.value)}
                   className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors"
                 />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                  {t('template_form.field_default_cluster')}
+                </label>
+                <select
+                  value={form.data.default_cluster_id}
+                  onChange={(e) => form.setData('default_cluster_id', e.target.value)}
+                  className={cn(inputCls, form.errors.default_cluster_id && 'border-danger')}
+                >
+                  <option value="">{t('template_form.default_cluster_placeholder')}</option>
+                  {clusters.map((c) => (
+                    <option key={c.id} value={c.id}>{c.display_name}</option>
+                  ))}
+                </select>
+                {form.errors.default_cluster_id && <p className={errorCls}>{form.errors.default_cluster_id}</p>}
+                <p className="mt-1.5 text-xs text-[var(--color-text-tertiary)]">
+                  {t('template_form.default_cluster_hint')}
+                </p>
               </div>
             </div>
           </div>

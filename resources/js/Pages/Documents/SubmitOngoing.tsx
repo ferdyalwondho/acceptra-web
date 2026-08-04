@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Head, Link, useForm } from '@inertiajs/react';
 import axios from 'axios';
 import AppShell, { PageHeader } from '@/layouts/AppShell';
+import SearchableSelect from '@/components/acceptra/SearchableSelect';
+import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
 import {
   ArrowLeft,
@@ -26,6 +28,13 @@ interface Props extends PageProps {
   clusters: ClusterOption[];
   partners: PartnerOption[];
   defaults: { vendor_contractor: string };
+}
+
+interface ResolvedApprover {
+  level_order: number;
+  role: string;
+  role_label: string;
+  approver: { id: string; name: string } | null;
 }
 
 const inputCls =
@@ -105,10 +114,94 @@ function Field({
   );
 }
 
+function ApprovalChainConfirmModal({
+  levels,
+  templateLevels,
+  approvers,
+  submitting,
+  onCancel,
+  onConfirm,
+}: {
+  levels: OfflineLevel[];
+  templateLevels: TemplateLevelOption[];
+  approvers: Record<string, Array<{ id: string; name: string }>>;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onCancel} />
+      <div className="relative z-[410] w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-semibold text-[var(--color-text-primary)]">Konfirmasi Alur Approval</h2>
+          <button onClick={onCancel} className="rounded-md p-1 transition-colors hover:bg-[var(--color-bg-subtle)]">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mb-4 text-sm text-[var(--color-text-secondary)]">
+          Dokumen ini akan melalui alur approval berikut. Pastikan level dan approver sudah benar sebelum submit.
+        </p>
+        <div className="max-h-80 space-y-2 overflow-y-auto">
+          {levels.map((level) => {
+            const tplLevel  = templateLevels.find((l) => l.level_order === level.level_order);
+            const roleLabel = tplLevel?.role_label ?? ROLE_LABELS[tplLevel?.role ?? ''] ?? `L${level.level_order}`;
+            let approverDisplay: string;
+            if (level.is_offline) {
+              approverDisplay = level.approver_name || '—';
+            } else {
+              const list = approvers[tplLevel?.role ?? ''] ?? [];
+              approverDisplay = list.find((u) => u.id === level.approver_id)?.name ?? '—';
+            }
+            return (
+              <div
+                key={level.level_order}
+                className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium text-[var(--color-text-primary)]">L{level.level_order} — {roleLabel}</p>
+                  <p className="truncate text-xs text-[var(--color-text-secondary)]">{approverDisplay}</p>
+                </div>
+                <span
+                  className={cn(
+                    'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                    level.is_offline
+                      ? 'bg-brand-ink text-white'
+                      : 'bg-[var(--color-bg-surface)] text-[var(--color-text-primary)] ring-1 ring-[var(--color-border-strong)]',
+                  )}
+                >
+                  {level.is_offline ? 'Approved (offline)' : 'Pending (digital)'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]"
+          >
+            Batal, Cek Lagi
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={submitting}
+            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+          >
+            {submitting ? 'Menyimpan…' : 'Ya, Submit Dokumen'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DocumentSubmitOngoing({ templates, clusters, partners, defaults }: Props) {
   const [templateLevels, setTemplateLevels] = useState<TemplateLevelOption[]>([]);
   const [approvers, setApprovers]           = useState<Record<string, Array<{ id: string; name: string }>>>({});
   const [loadingLevels, setLoadingLevels]   = useState(false);
+  const [resolvedApprovers, setResolvedApprovers] = useState<ResolvedApprover[]>([]);
+  const [clusterEditedManually, setClusterEditedManually] = useState(false);
 
   const form = useForm<{
     unique_id: string;
@@ -153,12 +246,14 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
         const allLevels = [L1_SYNTHETIC, ...data.data];
         setTemplateLevels(allLevels);
 
-        // Init levels form data — all default to offline
+        // Init levels form data — L1 always offline, L2+ default to Pending (digital)
+        // so a rushed submission doesn't silently mis-route a level that should be
+        // reviewed digitally.
         form.setData(
           'levels',
           allLevels.map((l) => ({
             level_order:    l.level_order,
-            is_offline:     true,
+            is_offline:     l.level_order === 1,
             approver_name:  '',
             offline_date:   '',
             evidence_file:  null,
@@ -184,6 +279,56 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.data.template_id]);
 
+  // Resolve cluster PICs per level once both cluster and template are picked — same
+  // /api/clusters/resolve call used by Create.tsx / Edit.tsx — so offline/pending
+  // approver fields below can be pre-filled instead of typed/picked from scratch.
+  useEffect(() => {
+    if (!form.data.template_id || !form.data.cluster_zone) {
+      setResolvedApprovers([]);
+      return;
+    }
+
+    axios
+      .get<{ data: ResolvedApprover[] }>('/api/clusters/resolve', {
+        params: { cluster: form.data.cluster_zone, template_id: form.data.template_id },
+      })
+      .then(({ data }) => setResolvedApprovers(data.data))
+      .catch(() => setResolvedApprovers([]));
+  }, [form.data.template_id, form.data.cluster_zone]);
+
+  // Backfill approver fields once resolvedApprovers arrives, for levels whose
+  // status was already toggled before the resolve call finished — never
+  // overwrites a value the admin already typed/picked.
+  useEffect(() => {
+    if (resolvedApprovers.length === 0) return;
+    const byLevel = new Map(resolvedApprovers.map((r) => [r.level_order, r.approver]));
+    let changed = false;
+    const updated = form.data.levels.map((l) => {
+      const approver = byLevel.get(l.level_order);
+      if (!approver) return l;
+      if (!l.is_offline && !l.approver_id) {
+        changed = true;
+        return { ...l, approver_id: approver.id };
+      }
+      if (l.is_offline && !l.approver_name) {
+        changed = true;
+        return { ...l, approver_name: approver.name.toUpperCase() };
+      }
+      return l;
+    });
+    if (changed) form.setData('levels', updated);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedApprovers]);
+
+  // Sync Cluster Zone to the selected template's default cluster whenever the
+  // template changes — unless the admin has already edited Cluster Zone manually.
+  useEffect(() => {
+    if (clusterEditedManually || !form.data.template_id) return;
+    const tpl = templates.find((t) => t.id === form.data.template_id);
+    if (tpl?.default_cluster) form.setData('cluster_zone', tpl.default_cluster);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.data.template_id]);
+
   // Update a single field on a level
   function updateLevel(idx: number, patch: Partial<OfflineLevel>) {
     const updated = form.data.levels.map((l, i) => (i === idx ? { ...l, ...patch } : l));
@@ -193,20 +338,46 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
   // Toggle offline/pending, enforcing no-gap rule with cascade
   function toggleLevel(idx: number, makeOffline: boolean) {
     if (idx === 0) return; // L1 is always offline — immutable
+    const byLevel = new Map(resolvedApprovers.map((r) => [r.level_order, r.approver]));
+
+    // Only fills the field when it's still empty — never clobbers a value the
+    // admin already typed/picked (e.g. re-toggling a level back and forth).
+    function applyResolved(l: OfflineLevel, offline: boolean): OfflineLevel {
+      const approver = byLevel.get(l.level_order);
+      if (offline) {
+        const approver_name = !l.approver_name && approver ? approver.name.toUpperCase() : l.approver_name;
+        return { ...l, is_offline: true, approver_name };
+      }
+      const approver_id = !l.approver_id && approver ? approver.id : l.approver_id;
+      return { ...l, is_offline: false, approver_id };
+    }
+
     const updated = form.data.levels.map((l, i) => {
-      if (i === idx) return { ...l, is_offline: makeOffline };
+      if (i === idx) return applyResolved(l, makeOffline);
       // cascade: making a level pending forces all levels below to pending
-      if (!makeOffline && i > idx) return { ...l, is_offline: false };
+      if (!makeOffline && i > idx) return applyResolved(l, false);
       // cascade: making a level offline forces all levels above to offline
-      if (makeOffline && i < idx) return { ...l, is_offline: true };
+      if (makeOffline && i < idx) return applyResolved(l, true);
       return l;
     });
     form.setData('levels', updated);
   }
 
+  const uniqueIdDup = useDuplicateCheck('unique_id', form.data.unique_id);
+  const ptIndexDup  = useDuplicateCheck('pt_index', form.data.pt_index);
+
+  const [showConfirm, setShowConfirm] = useState(false);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    form.post('/documents/submit-ongoing', { forceFormData: true });
+    setShowConfirm(true);
+  }
+
+  function confirmSubmit() {
+    form.post('/documents/submit-ongoing', {
+      forceFormData: true,
+      onFinish: () => setShowConfirm(false),
+    });
   }
 
   // Helper to get a nested level error from form.errors
@@ -273,30 +444,33 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
           <div className="grid gap-4 sm:grid-cols-2">
             {/* Unique ID */}
             <div className="sm:col-span-2">
-              <Field label="Unique ID" required error={form.errors.unique_id}>
+              <Field
+                label="Unique ID"
+                required
+                error={form.errors.unique_id ?? (uniqueIdDup.duplicate ? 'Unique ID ini sudah digunakan — silakan pilih yang lain.' : undefined)}
+              >
                 <input
                   type="text"
                   value={form.data.unique_id}
+                  maxLength={50}
                   onChange={(e) => form.setData('unique_id', e.target.value.toUpperCase())}
                   placeholder="Contoh: ACC-2026-0001"
-                  className={inputCls}
+                  className={cn(inputCls, uniqueIdDup.duplicate && 'border-danger')}
                 />
+                {uniqueIdDup.checking && <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">Memeriksa…</p>}
               </Field>
             </div>
 
             {/* Partner */}
             <div className="sm:col-span-2">
               <Field label="Partner / Subkontraktor" required error={form.errors.partner_id}>
-                <select
+                <SearchableSelect
+                  options={partners.map((p) => ({ value: p.id, label: p.name }))}
                   value={form.data.partner_id}
-                  onChange={(e) => form.setData('partner_id', e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="">-- Pilih partner --</option>
-                  {partners.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
+                  onChange={(v) => form.setData('partner_id', v)}
+                  placeholder="-- Pilih partner --"
+                  hasError={!!form.errors.partner_id}
+                />
               </Field>
             </div>
 
@@ -314,19 +488,24 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
 
             {/* PT Index */}
             <div className="sm:col-span-2">
-              <Field label="PT Index" required error={form.errors.pt_index}>
+              <Field
+                label="PT Index"
+                required
+                error={form.errors.pt_index ?? (ptIndexDup.duplicate ? 'PT Index ini sudah digunakan — silakan pilih yang lain.' : undefined)}
+              >
                 <input
                   type="text"
                   value={form.data.pt_index}
                   onChange={(e) => form.setData('pt_index', e.target.value.toUpperCase())}
                   placeholder="Contoh: PTI-2026-001"
-                  className={inputCls}
+                  className={cn(inputCls, ptIndexDup.duplicate && 'border-danger')}
                 />
+                {ptIndexDup.checking && <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">Memeriksa…</p>}
               </Field>
             </div>
 
             {/* Project Code */}
-            <Field label="Project Code" error={form.errors.project_code}>
+            <Field label="Project Code" required error={form.errors.project_code}>
               <input
                 type="text"
                 value={form.data.project_code}
@@ -337,7 +516,7 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
             </Field>
 
             {/* Link ID */}
-            <Field label="Link ID" error={form.errors.link_id}>
+            <Field label="Link ID" required error={form.errors.link_id}>
               <input
                 type="text"
                 value={form.data.link_id}
@@ -348,7 +527,7 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
 
             {/* Link Name */}
             <div className="sm:col-span-2">
-              <Field label="Link Name" error={form.errors.link_name}>
+              <Field label="Link Name" required error={form.errors.link_name}>
                 <input
                   type="text"
                   value={form.data.link_name}
@@ -361,16 +540,16 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
             {/* Cluster Zone */}
             <div className="sm:col-span-2">
               <Field label="Cluster Zone" required error={form.errors.cluster_zone}>
-                <select
+                <SearchableSelect
+                  options={clusters.map((c) => ({ value: c.display_name, label: c.display_name, sublabel: c.province }))}
                   value={form.data.cluster_zone}
-                  onChange={(e) => form.setData('cluster_zone', e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="">-- Pilih cluster --</option>
-                  {clusters.map((c) => (
-                    <option key={c.id} value={c.display_name}>{c.display_name}</option>
-                  ))}
-                </select>
+                  onChange={(v) => {
+                    setClusterEditedManually(true);
+                    form.setData('cluster_zone', v);
+                  }}
+                  placeholder="-- Pilih cluster --"
+                  hasError={!!form.errors.cluster_zone}
+                />
               </Field>
             </div>
           </div>
@@ -379,20 +558,17 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
         {/* ─── 2. Template / SOW ─── */}
         <Section step={2} title="Template / SOW" done={templateDone}>
           <Field label="SOW Template" required error={form.errors.template_id}>
-            <select
+            <SearchableSelect
+              options={templates.map((t) => ({
+                value: t.id,
+                label: `${t.name}${t.sow_code ? ` (${t.sow_code})` : ''}`,
+              }))}
               value={form.data.template_id}
-              onChange={(e) => form.setData('template_id', e.target.value)}
-              className={inputCls}
+              onChange={(v) => form.setData('template_id', v)}
+              placeholder="-- Pilih template --"
               disabled={loadingLevels}
-            >
-              <option value="">-- Pilih template --</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                  {t.sow_code ? ` (${t.sow_code})` : ''}
-                </option>
-              ))}
-            </select>
+              hasError={!!form.errors.template_id}
+            />
           </Field>
           {loadingLevels && (
             <p className="mt-2 text-xs text-[var(--color-text-secondary)]">Memuat level approval…</p>
@@ -576,6 +752,9 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
 
         {/* ─── 4. Upload PDF ─── */}
         <Section step={4} title="Upload PDF (Partial-Signed)" done={pdfDone}>
+          <p className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
+            PDF <span className="text-danger">*</span>
+          </p>
           <p className="mb-4 text-xs text-[var(--color-text-secondary)]">
             Upload PDF yang sudah punya tanda tangan offline. Kotak TTD digital yang masih kosong
             akan diisi sistem saat approver pending menyetujui.
@@ -631,13 +810,29 @@ export default function DocumentSubmitOngoing({ templates, clusters, partners, d
           </Link>
           <button
             type="submit"
-            disabled={form.processing}
+            disabled={
+              form.processing
+              || !pdfDone
+              || uniqueIdDup.duplicate || uniqueIdDup.checking
+              || ptIndexDup.duplicate || ptIndexDup.checking
+            }
             className="h-9 rounded-md bg-brand-ink px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {form.processing ? 'Menyimpan…' : 'Submit Dokumen'}
           </button>
         </div>
       </form>
+
+      {showConfirm && (
+        <ApprovalChainConfirmModal
+          levels={form.data.levels}
+          templateLevels={templateLevels}
+          approvers={approvers}
+          submitting={form.processing}
+          onCancel={() => setShowConfirm(false)}
+          onConfirm={confirmSubmit}
+        />
+      )}
     </AppShell>
   );
 }

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Auth\Passwords\CanResetPassword;
 use Illuminate\Contracts\Auth\CanResetPassword as CanResetPasswordContract;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -46,6 +47,16 @@ class User extends Authenticatable implements CanResetPasswordContract
             'password'              => 'hashed',
             'has_seen_get_started'  => 'boolean',
         ];
+    }
+
+    // Email is matched case-insensitively at login/reset (see LoginController,
+    // ForgotPasswordController, ResetPasswordController) — normalize on write too so the
+    // stored value and the unique index stay consistent regardless of input casing.
+    protected function email(): Attribute
+    {
+        return Attribute::make(
+            set: fn (string $value) => mb_strtolower(trim($value)),
+        );
     }
 
     // UUID v7 untuk semua ID baru (SRS C-7)

@@ -50,7 +50,7 @@ class ImportUsersCommand extends Command
 
             $name = trim((string) $cells->current()->getValue());
             $cells->next();
-            $email = trim((string) $cells->current()->getValue());
+            $email = mb_strtolower(trim((string) $cells->current()->getValue()));
             $cells->next();
             $role = trim((string) $cells->current()->getValue());
             $cells->next();
@@ -81,7 +81,7 @@ class ImportUsersCommand extends Command
                         continue;
                     }
 
-                    $matches = Cluster::where('name', $piece)->get();
+                    $matches = Cluster::where('name', mb_strtoupper($piece))->get();
 
                     if ($matches->count() === 0) {
                         $clustersNotFound[] = "{$email}: {$piece}";

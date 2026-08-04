@@ -78,6 +78,7 @@ const PLACEMENT_DOC_COL_X     = 220;
 function buildDefaultPositions(
   placementLevels: TemplateLevelRecord[],
   pageHeight: number,
+  isImported = false,
 ): Record<string, Pos> {
   const init: Record<string, Pos> = {};
 
@@ -90,13 +91,15 @@ function buildDefaultPositions(
     init[`${l.level_order}_name`] = { x: 20, y: baseY + PLACEMENT_NAME_GAP,   width: 160, height: 28 };
   });
 
-  // Kolom 2: overlay milik dokumen (bukan per-level), anchor ke bawah halaman
+  // Kolom 2: overlay milik dokumen (bukan per-level), anchor ke bawah halaman. Dokumen hasil
+  // Submit Ongoing (is_imported) sudah punya tanggal submit asli tercetak di PDF-nya sendiri —
+  // jangan tawarkan kotak "Tgl Submit" yang bisa menimpanya dengan tanggal import hari ini.
   const docKeys: Array<[string, number]> = [
     ['doc_submitted', 160],
     ['doc_status',    260],
     ['doc_punchlist', 220],
     ['doc_atpdate',   160],
-  ];
+  ].filter(([key]) => !(isImported && key === 'doc_submitted')) as Array<[string, number]>;
   const docStackH = docKeys.length * PLACEMENT_DOC_GAP;
   const col2Top = Math.max(10, pageHeight - PLACEMENT_MARGIN_BOTTOM - docStackH);
   docKeys.forEach(([key, w], i) => {
@@ -117,9 +120,14 @@ interface PlacementPanelProps {
   // Partner-routing RoutingPanel) can bundle positions together with PICs/Excel into one submit.
   mode?: 'standalone' | 'controlled';
   onPositionsChange?: (positions: Record<string, Pos>) => void;
+  // Submit Ongoing (imported) documents already have their real submission date printed on the
+  // original PDF — skip seeding a "Tgl Submit" box so it can't be overwritten with today's date.
+  isImported?: boolean;
 }
 
-function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalone', onPositionsChange }: PlacementPanelProps) {
+function PlacementPanel({
+  pdfUrl, levels, documentId, onSaved, mode = 'standalone', onPositionsChange, isImported = false,
+}: PlacementPanelProps) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef   = useRef<HTMLDivElement>(null);
@@ -128,9 +136,11 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
   const [saved,     setSaved]     = useState(false);
   const [canvasH,   setCanvasH]   = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Only L2+ get placement boxes; L1 is auto-approved
-  const placementLevels = levels.filter(l => l.level_order > 1);
+  // Only L2+ that actually require a signature get placement boxes — L1 is auto-approved,
+  // and approve-only levels (requires_signature=false, e.g. MS BO Team) never get stamped.
+  const placementLevels = levels.filter(l => l.level_order > 1 && l.requires_signature);
 
   const [positions, setPositions] = useState<Record<string, Pos>>({});
   const defaultsSeeded = useRef(false);
@@ -166,7 +176,7 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
 
         if (!defaultsSeeded.current) {
           defaultsSeeded.current = true;
-          setPositions(buildDefaultPositions(placementLevels, vp.height));
+          setPositions(buildDefaultPositions(placementLevels, vp.height, isImported));
         }
 
         await page.render({ canvas, viewport: vp }).promise;
@@ -232,6 +242,7 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveError(null);
     const finalPositions: Record<string, PlacementPosition> = {};
     Object.entries(positions).forEach(([lo, pos]) => {
       finalPositions[lo] = { page: 1, ...pos };
@@ -240,6 +251,16 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
       await axios.post(`/documents/${documentId}/placement`, { positions: finalPositions });
       setSaved(true);
       onSaved();
+    } catch (err) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      const serverMessage = axios.isAxiosError(err) ? err.response?.data?.message : undefined;
+      if (status === 419) {
+        setSaveError(t('documents.show.placement_session_expired'));
+      } else if (serverMessage) {
+        setSaveError(serverMessage);
+      } else {
+        setSaveError(t('documents.show.placement_save_error'));
+      }
     } finally {
       setSaving(false);
     }
@@ -330,6 +351,12 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
           })}
         </div>
 
+        {mode === 'standalone' && saveError && (
+          <div className="mt-4 rounded-lg border border-danger/30 bg-danger-surface px-4 py-3 text-xs text-danger">
+            {saveError}
+          </div>
+        )}
+
         {mode === 'standalone' && (
         <div className="mt-4 flex items-center justify-end gap-3">
           {saved && (
@@ -354,13 +381,14 @@ function PlacementPanel({ pdfUrl, levels, documentId, onSaved, mode = 'standalon
 /* ── Routing Panel (Partner-submitted documents, post-L1-approve) ──────── */
 
 function RoutingPanel({
-  documentId, templateId, clusterZone, pdfUrl, snapLevels,
+  documentId, templateId, clusterZone, pdfUrl, snapLevels, variant = 'routing',
 }: {
   documentId: string;
   templateId: string;
   clusterZone: string | null;
   pdfUrl: string;
   snapLevels: TemplateLevelRecord[];
+  variant?: 'routing' | 'punchlist';
 }) {
   const { t } = useTranslation();
   const [resolvedApprovers, setResolvedApprovers] = useState<Array<{
@@ -370,9 +398,13 @@ function RoutingPanel({
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [errors,    setErrors]    = useState<Record<string, string>>({});
+  const [generalError, setGeneralError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!templateId || !clusterZone) return;
+    // Punchlist placement: L2-L4 approvers are already frozen from the original
+    // approval chain, not re-resolved from the cluster mapping — re-resolving here
+    // could even show different names if the mapping changed since original approval.
+    if (variant === 'punchlist' || !templateId || !clusterZone) return;
     axios
       .get<{ data: typeof resolvedApprovers }>('/api/clusters/resolve', {
         params: { cluster: clusterZone, template_id: templateId },
@@ -380,7 +412,7 @@ function RoutingPanel({
       .then(({ data }) => setResolvedApprovers(data.data))
       .catch(() => setResolvedApprovers([]));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId, clusterZone]);
+  }, [variant, templateId, clusterZone]);
 
   const canSubmit = !!positions && Object.keys(positions).length > 0;
 
@@ -388,6 +420,7 @@ function RoutingPanel({
     if (submitting || !canSubmit) return;
     setSubmitting(true);
     setErrors({});
+    setGeneralError(null);
     const finalPositions: Record<string, PlacementPosition> = {};
     Object.entries(positions ?? {}).forEach(([lo, pos]) => {
       finalPositions[lo] = { page: 1, ...pos };
@@ -398,6 +431,24 @@ function RoutingPanel({
     }, {
       forceFormData: true,
       onError: (e) => setErrors(e as Record<string, string>),
+      // onError only fires for Laravel ValidationExceptions. A raw abort_if() (e.g. the
+      // "not awaiting routing" guard) or a 500 surfaces as onHttpException instead — without
+      // this, those responses were silently dropped and the Save button just reset with no
+      // feedback at all, which is what looked like a frozen/unresponsive save. Returning
+      // `false` also suppresses Inertia's own raw technical-error dialog so our friendly
+      // banner is the only thing the admin sees.
+      onHttpException: (response) => {
+        const data = response.data;
+        const message = typeof data === 'object' && data !== null && 'message' in data
+          ? String((data as { message?: unknown }).message)
+          : undefined;
+        setGeneralError(message || t('documents.show.placement_save_error'));
+        return false;
+      },
+      onNetworkError: () => {
+        setGeneralError(t('documents.show.placement_save_error'));
+        return false;
+      },
       onFinish: () => setSubmitting(false),
     });
   }
@@ -410,25 +461,28 @@ function RoutingPanel({
       </div>
 
       <div className="space-y-5 p-4">
-        {/* PIC per Level — read-only, auto-resolved from the cluster at L1-approval time */}
-        <div>
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
-            {t('documents.show.routing_panel_pic_heading')}
-          </p>
-          <p className="mb-3 text-xs text-[var(--color-text-secondary)]">
-            {t('documents.show.routing_panel_pic_auto_notice')}
-          </p>
-          <div className="space-y-2">
-            {resolvedApprovers.map((r) => (
-              <div key={r.level_order} className="flex items-center gap-3 text-sm">
-                <span className="w-44 shrink-0 font-medium text-[var(--color-text-secondary)]">
-                  L{r.level_order} — {r.role_label}
-                </span>
-                <span className="text-[var(--color-text-primary)]">{r.approver?.name ?? '—'}</span>
-              </div>
-            ))}
+        {/* PIC per Level — read-only, auto-resolved from the cluster at L1-approval time.
+            Not applicable to a punchlist placement: those levels are already frozen. */}
+        {variant !== 'punchlist' && (
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+              {t('documents.show.routing_panel_pic_heading')}
+            </p>
+            <p className="mb-3 text-xs text-[var(--color-text-secondary)]">
+              {t('documents.show.routing_panel_pic_auto_notice')}
+            </p>
+            <div className="space-y-2">
+              {resolvedApprovers.map((r) => (
+                <div key={r.level_order} className="flex items-center gap-3 text-sm">
+                  <span className="w-44 shrink-0 font-medium text-[var(--color-text-secondary)]">
+                    L{r.level_order} — {r.role_label}
+                  </span>
+                  <span className="text-[var(--color-text-primary)]">{r.approver?.name ?? '—'}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Placement — controlled, embedded in this single form */}
         <PlacementPanel
@@ -472,6 +526,14 @@ function RoutingPanel({
           {errors.excel_file && <p className="mt-1 text-xs text-danger">{errors.excel_file}</p>}
         </div>
 
+        {(generalError || Object.entries(errors).some(([key]) => key !== 'excel_file')) && (
+          <div className="rounded-lg border border-danger/30 bg-danger-surface px-4 py-3 text-xs text-danger">
+            {generalError
+              ?? Object.entries(errors).find(([key]) => key !== 'excel_file')?.[1]
+              ?? t('documents.show.placement_save_error')}
+          </div>
+        )}
+
         <div className="flex items-center justify-end gap-3">
           <button
             disabled={submitting || !canSubmit}
@@ -480,182 +542,6 @@ function RoutingPanel({
             className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? t('documents.show.routing_panel_saving_btn') : t('documents.show.routing_panel_submit_btn')}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── Revision Decision Panel (Admin approve/reject a Partner-submitted revision) ── */
-
-function RevisionDecisionPanel({
-  documentId, pdfUrl, rejectedLevel,
-}: {
-  documentId: string;
-  pdfUrl: string;
-  rejectedLevel: number | null;
-}) {
-  const { t } = useTranslation();
-  const [submitting, setSubmitting] = useState(false);
-  const [showRejectForm, setShowRejectForm] = useState(false);
-  const [reason, setReason] = useState('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
-
-  function submit(action: 'approve' | 'reject') {
-    if (submitting) return;
-    if (action === 'reject' && !reason.trim()) return;
-    setSubmitting(true);
-    setErrors({});
-    router.post(`/documents/${documentId}/review-revision`, {
-      action,
-      reason: action === 'reject' ? reason : undefined,
-    }, {
-      onError: (e) => setErrors(e as Record<string, string>),
-      onFinish: () => setSubmitting(false),
-    });
-  }
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-warning/40 bg-[var(--color-bg-surface)] shadow-xs">
-      <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-surface/40 px-5 py-3">
-        <AlertTriangle className="h-4 w-4 text-warning" />
-        <span className="text-sm font-semibold text-warning">
-          {t('documents.show.revision_decision_title', { level: rejectedLevel ?? '' })}
-        </span>
-      </div>
-
-      <div className="space-y-4 p-4">
-        <p className="text-sm text-[var(--color-text-secondary)]">
-          {t('documents.show.revision_decision_body')}
-        </p>
-
-        <a
-          href={pdfUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="flex h-9 w-fit items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
-        >
-          <FileText className="h-4 w-4" /> {t('documents.show.revision_decision_view_pdf')}
-        </a>
-
-        {showRejectForm ? (
-          <div className="space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
-            <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
-              {t('documents.show.revision_decision_reason_label')}
-            </label>
-            <textarea
-              rows={3}
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full resize-none rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
-            />
-            {errors.reason && <p className="text-xs text-danger">{errors.reason}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => { setShowRejectForm(false); setReason(''); }}
-                className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-white"
-              >
-                {t('documents.show.btn_batal')}
-              </button>
-              <button
-                type="button"
-                disabled={submitting || !reason.trim()}
-                onClick={() => submit('reject')}
-                className="h-9 rounded-md bg-danger px-4 text-sm font-semibold text-white transition-colors hover:opacity-90 disabled:opacity-50"
-              >
-                {submitting ? t('documents.show.submitting') : t('documents.show.revision_decision_reject_confirm_btn')}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center justify-end gap-3">
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => setShowRejectForm(true)}
-              className="flex h-9 items-center gap-1.5 rounded-md border border-danger/40 px-4 text-sm font-semibold text-danger transition-colors hover:bg-danger-surface disabled:opacity-50"
-            >
-              <XCircle className="h-4 w-4" /> {t('documents.show.revision_decision_reject_btn')}
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => submit('approve')}
-              className="flex h-9 items-center gap-1.5 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
-            >
-              <CheckCircle2 className="h-4 w-4" /> {submitting ? t('documents.show.submitting') : t('documents.show.revision_decision_approve_btn')}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ── Revision Placement Panel (Admin places signature boxes after approving a revision) ── */
-
-function RevisionPlacementPanel({
-  documentId, pdfUrl, snapLevels, rejectedLevel,
-}: {
-  documentId: string;
-  pdfUrl: string;
-  snapLevels: TemplateLevelRecord[];
-  rejectedLevel: number | null;
-}) {
-  const { t } = useTranslation();
-  const [positions, setPositions] = useState<Record<string, Pos> | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-
-  const canSubmit = !!positions && Object.keys(positions).length > 0;
-
-  function handleSubmit() {
-    if (submitting || !canSubmit) return;
-    setSubmitting(true);
-    setErrors({});
-    const finalPositions: Record<string, PlacementPosition> = {};
-    Object.entries(positions ?? {}).forEach(([lo, pos]) => {
-      finalPositions[lo] = { page: 1, ...pos };
-    });
-    router.post(`/documents/${documentId}/finalize-revision-placement`, {
-      positions: finalPositions,
-    }, {
-      onError: (e) => setErrors(e as Record<string, string>),
-      onFinish: () => setSubmitting(false),
-    });
-  }
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-warning/40 bg-[var(--color-bg-surface)] shadow-xs">
-      <div className="flex items-center gap-2 border-b border-warning/30 bg-warning-surface/40 px-5 py-3">
-        <AlertTriangle className="h-4 w-4 text-warning" />
-        <span className="text-sm font-semibold text-warning">
-          {t('documents.show.revision_placement_title', { level: rejectedLevel ?? '' })}
-        </span>
-      </div>
-
-      <div className="space-y-5 p-4">
-        <PlacementPanel
-          pdfUrl={pdfUrl}
-          levels={snapLevels}
-          documentId={documentId}
-          onSaved={() => {}}
-          mode="controlled"
-          onPositionsChange={setPositions}
-        />
-
-        {errors.positions && <p className="text-xs text-danger">{errors.positions}</p>}
-
-        <div className="flex items-center justify-end gap-3">
-          <button
-            disabled={submitting || !canSubmit}
-            onClick={handleSubmit}
-            title={!canSubmit ? t('documents.show.routing_panel_disabled_hint') : undefined}
-            className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {submitting ? t('documents.show.routing_panel_saving_btn') : t('documents.show.revision_placement_submit_btn')}
           </button>
         </div>
       </div>
@@ -844,6 +730,58 @@ function SubmitApprovalModal({ submitting, onCancel, onConfirm }: { submitting: 
   );
 }
 
+/* ── Delete Document Confirm Modal ──────────────────────────────────────── */
+
+function DeleteDocumentModal({
+  uniqueId, submitting, onCancel, onConfirm,
+}: {
+  uniqueId: string;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: (confirmText: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [typedText, setTypedText] = useState('');
+  const matches = typedText === uniqueId;
+
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onCancel} />
+      <div className="relative z-[410] w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+        <div className="mb-3 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-danger" />
+          <h2 className="font-semibold text-[var(--color-text-primary)]">{t('documents.show.delete_heading')}</h2>
+        </div>
+        <p className="text-sm text-[var(--color-text-secondary)]">{t('documents.show.delete_warning')}</p>
+        <div className="mt-4">
+          <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+            {t('documents.show.delete_confirm_label', { uniqueId })}
+          </label>
+          <input
+            type="text"
+            value={typedText}
+            onChange={(e) => setTypedText(e.target.value)}
+            placeholder={uniqueId}
+            className="h-9 w-full rounded-sm border border-danger/40 bg-white px-3 font-mono text-sm focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40"
+          />
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button onClick={onCancel} className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]">
+            {t('documents.show.btn_batal')}
+          </button>
+          <button
+            onClick={() => onConfirm(typedText)}
+            disabled={!matches || submitting}
+            className="h-9 rounded-md bg-danger px-4 text-sm font-semibold text-white hover:bg-danger/90 disabled:opacity-50"
+          >
+            {submitting ? t('documents.show.deleting') : t('documents.show.delete_btn')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Audit Trail Tab ─────────────────────────────────────────────────────── */
 
 type AuditEventType = 'submit' | 'approve' | 'reject' | 'revise' | 'reassign' | 'generate' | 'draft';
@@ -965,8 +903,9 @@ function AuditTrailTab({ logs, documentId }: { logs: AuditLogEntry[]; documentId
 export default function DocumentShow({ document: doc, anchor_failed, pdf_url, excel_attachment, audit_logs, initial_tab }: Props) {
   const { auth, flash } = usePage<PageProps>().props;
   const { t } = useTranslation();
-  const isPartner = auth.user?.role === 'partner';
-  const isAdmin   = ['admin', 'super_admin'].includes(auth.user?.role ?? '');
+  const isPartner    = auth.user?.role === 'partner';
+  const isAdmin      = ['admin', 'super_admin'].includes(auth.user?.role ?? '');
+  const isSuperAdmin = auth.user?.role === 'super_admin';
 
   const [activeTab,          setActiveTab]          = useState(initial_tab ?? 'overview');
   const [showReassign,       setShowReassign]       = useState(false);
@@ -976,6 +915,8 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const [attachmentDeleted,  setAttachmentDeleted]  = useState(false);
   const [showSubmitConfirm,  setShowSubmitConfirm]  = useState(false);
   const [submittingApproval, setSubmittingApproval] = useState(false);
+  const [showDeleteDocModal, setShowDeleteDocModal] = useState(false);
+  const [deletingDoc,        setDeletingDoc]        = useState(false);
 
   const handleTabChange = (value: string) => {
     setActiveTab(value);
@@ -983,6 +924,15 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     url.searchParams.set('tab', value);
     window.history.replaceState({}, '', url.toString());
   };
+
+  // Approvers have no "Documents" entry in their nav — a document opened from
+  // History must return there on Back, not to /documents (which they can't browse).
+  const cameFromHistory = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('from') === 'history';
+  const backHref  = cameFromHistory ? '/approvals/history' : '/documents';
+  const backLabel = cameFromHistory
+    ? t('documents.show.breadcrumb_back_history')
+    : t('documents.show.breadcrumb_back');
 
   const handleDeleteAttachment = () => {
     if (!excel_attachment || deletingAtt) return;
@@ -1002,15 +952,32 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
     });
   };
 
+  const handleDeleteDocument = (confirmText: string) => {
+    if (deletingDoc) return;
+    setDeletingDoc(true);
+    router.delete(`/documents/${doc.id}`, {
+      data: { confirm_text: confirmText },
+      onSuccess: () => router.visit('/documents'),
+      onFinish:  () => setDeletingDoc(false),
+    });
+  };
+
   const statusCode   = doc.status_code;
   const isDone       = ['13', '16'].includes(statusCode);
   const isDraft      = statusCode === 'draft';
-  const canEdit      = ['02', '05', '08', '11', '14', 'draft'].includes(statusCode);
-  const canReassign  = isAdmin && !['draft', '13', '14', '15', '16'].includes(statusCode);
+  // '14' (punchlist revision) is only editable by Admin or the document's owning Partner —
+  // never a Partner viewing someone else's document, and never '17' (L1 gate, no edit page).
+  const isOwningPartner  = isPartner && doc.submitter?.id === auth.user?.id;
+  const canEditPunchlist = statusCode === '14' && (isAdmin || isOwningPartner);
+  const canEdit      = canEditPunchlist || ['02', '05', '08', '11', 'draft'].includes(statusCode);
+  const canReassign  = isAdmin && !['draft', '13', '14', '15', '16', '17'].includes(statusCode);
+  const hasActiveL1Step = doc.approval_steps.some((s) => s.level_order === 1 && s.is_active);
   // Placement is Admin-only — a Partner viewing their own document must never see or use it.
-  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending
-    && !doc.revision_pending_review && !doc.revision_placement_pending
-    && !placementSaved && !!pdf_url;
+  // Also excluded during any punchlist stage/L1-gate window, so the standalone panel can't
+  // be used to bypass the intended upload → (L1 gate) → placement sequencing.
+  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending && !placementSaved && !!pdf_url
+    && !hasActiveL1Step
+    && !['14', '15', '16', '17'].includes(statusCode);
 
   const hasPdf          = !!doc.original_pdf_path;
   const picsComplete    = doc.approval_steps.filter((s) => s.level_order > 1).every((s) => !!s.approver_id);
@@ -1068,8 +1035,8 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
 
       {/* Breadcrumb */}
       <div className="mb-4 flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
-        <Link href="/documents" className="flex items-center gap-1 transition-colors hover:text-ming">
-          <ArrowLeft className="h-3.5 w-3.5" /> {t('documents.show.breadcrumb_back')}
+        <Link href={backHref} className="flex items-center gap-1 transition-colors hover:text-ming">
+          <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
         </Link>
         <span>/</span>
         <span className="font-mono text-[var(--color-text-primary)]">{doc.unique_id}</span>
@@ -1154,27 +1121,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   clusterZone={doc.cluster_zone}
                   pdfUrl={pdf_url}
                   snapLevels={snapLevels}
-                />
-              )}
-
-              {/* Partner submitted a revision after rejection — Admin must approve/reject it
-                  before signature placement is redone (placement is Admin-only). */}
-              {isAdmin && doc.revision_pending_review && pdf_url && (
-                <RevisionDecisionPanel
-                  documentId={doc.id}
-                  pdfUrl={pdf_url}
-                  rejectedLevel={doc.previous_pdf_rejected_level}
-                />
-              )}
-
-              {/* Revision approved — Admin redoes signature placement before the rejected
-                  level's approver is reactivated. */}
-              {isAdmin && doc.revision_placement_pending && pdf_url && (
-                <RevisionPlacementPanel
-                  documentId={doc.id}
-                  pdfUrl={pdf_url}
-                  snapLevels={snapLevels}
-                  rejectedLevel={doc.previous_pdf_rejected_level}
+                  variant={statusCode === '14' ? 'punchlist' : 'routing'}
                 />
               )}
 
@@ -1184,6 +1131,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   pdfUrl={pdf_url!}
                   levels={snapLevels}
                   documentId={doc.id}
+                  isImported={doc.is_imported}
                   onSaved={() => {
                     setPlacementSaved(true);
                     router.reload({ only: ['document', 'anchor_failed'] });
@@ -1257,29 +1205,63 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                         <AlertTriangle className="h-4 w-4 text-warning" />
                         <span className="text-sm font-semibold text-warning">{t('documents.show.punchlist_heading')}</span>
                       </div>
-                      {isPartner ? (
-                        <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
-                          {punchlistSteps.map((s) => s.punchlist_notes).join('\n\n')}
-                        </p>
-                      ) : (
-                        <div className="space-y-2">
-                          {punchlistSteps.map((s) => (
-                            <p key={s.id} className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
-                              <span className="font-semibold">
-                                L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}:
-                              </span>{' '}
+                      <div className="space-y-3">
+                        {punchlistSteps.map((s) => (
+                          <div key={s.id}>
+                            <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">
+                              {!isPartner && (
+                                <span className="font-semibold">
+                                  L{s.level_order} — {s.approver_name ?? ROLE_LABELS[s.role] ?? s.role}:
+                                </span>
+                              )}{' '}
                               {s.punchlist_notes}
                             </p>
-                          ))}
-                        </div>
-                      )}
-                      {statusCode === '14' && isAdmin && (
+                            {s.evidence_path && (
+                              <a
+                                href={`/documents/${doc.id}/approval-steps/${s.id}/evidence`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-ming hover:underline"
+                              >
+                                <Paperclip className="h-3 w-3" /> {t('documents.show.preview_evidence')}
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {(() => {
+                        const failedVerification = doc.punchlist_verifications?.find((v) => v.status === 'rejected' && v.evidence_path);
+                        return failedVerification ? (
+                          <div className="mt-3 rounded-md border border-danger/20 bg-white/60 p-3">
+                            <p className="mb-1 text-xs font-semibold text-danger">{t('documents.show.fail_evidence_heading')}</p>
+                            {failedVerification.notes && (
+                              <p className="mb-1.5 whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">{failedVerification.notes}</p>
+                            )}
+                            <a
+                              href={`/documents/${doc.id}/punchlist-verifications/${failedVerification.id}/evidence`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-ming hover:underline"
+                            >
+                              <Paperclip className="h-3 w-3" /> {t('documents.show.preview_evidence')}
+                            </a>
+                          </div>
+                        ) : null;
+                      })()}
+                      {canEditPunchlist && (
                         <Link
                           href={`/documents/${doc.id}/edit`}
                           className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-md bg-brand-ink px-3 text-sm font-semibold text-white transition-colors hover:bg-brand-hover"
                         >
                           <RotateCcw className="h-3.5 w-3.5" /> {t('documents.show.btn_upload_revisi')}
                         </Link>
+                      )}
+                      {statusCode === '17' && (
+                        <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
+                          {isPartner
+                            ? 'Menunggu Admin (L1) me-review revisi yang kamu upload.'
+                            : 'Revisi punchlist dari Subcon menunggu approval L1 kamu.'}
+                        </p>
                       )}
                       {statusCode === '15' && (
                         <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
@@ -1336,6 +1318,21 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   )}
                 </div>
               </div>
+
+              {isSuperAdmin && (
+                <div className="rounded-lg border border-danger/30 bg-danger-surface/40 p-5 shadow-xs">
+                  <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-danger">
+                    <AlertTriangle className="h-3.5 w-3.5" /> {t('documents.show.danger_zone_heading')}
+                  </p>
+                  <p className="mb-3 text-xs text-[var(--color-text-secondary)]">{t('documents.show.danger_zone_body')}</p>
+                  <button
+                    onClick={() => setShowDeleteDocModal(true)}
+                    className="flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-danger/40 text-sm font-semibold text-danger transition-colors hover:bg-danger-surface"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> {t('documents.show.delete_document_btn')}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </TabsContent>
@@ -1438,6 +1435,14 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
           submitting={submittingApproval}
           onCancel={() => setShowSubmitConfirm(false)}
           onConfirm={handleSubmitApproval}
+        />
+      )}
+      {showDeleteDocModal && (
+        <DeleteDocumentModal
+          uniqueId={doc.unique_id}
+          submitting={deletingDoc}
+          onCancel={() => setShowDeleteDocModal(false)}
+          onConfirm={handleDeleteDocument}
         />
       )}
     </AppShell>

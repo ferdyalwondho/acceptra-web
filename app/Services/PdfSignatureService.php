@@ -105,6 +105,7 @@ class PdfSignatureService
             $tempParsable = $this->decompressPdf($tempInput);
 
             $pdf       = new Fpdi('P', 'pt');
+            $pdf->SetFillColor(255, 255, 255);
             $pageCount = $pdf->setSourceFile($tempParsable);
 
             for ($p = 1; $p <= $pageCount; $p++) {
@@ -164,17 +165,20 @@ class PdfSignatureService
                         $nameRowH = $h / 2;
                         $dateRowH = $h - $nameRowH;
                         $dateText = $step->action_at?->format('d M Y') ?? $step->offline_date?->format('d M Y');
+                        // FPDF's core fonts only render single-byte cp1252 — raw UTF-8 (e.g.
+                        // accented characters in a name) renders as mojibake without this.
+                        $name = $this->toPdfEncoding($step->approver->name);
 
                         $pdf->SetTextColor(0, 0, 0);
 
-                        $nameFontSize = $this->fitFontSize($pdf, $step->approver->name, $w, $nameRowH, 'B');
+                        $nameFontSize = $this->fitFontSize($pdf, $name, $w, $nameRowH, 'B');
                         $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
-                        $pdf->Cell($w, $nameFontSize, $step->approver->name, 0, 0, 'L');
+                        $pdf->Cell($w, $nameFontSize, $name, 0, 0, 'L', true);
 
                         if ($dateText) {
                             $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
                             $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
-                            $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L');
+                            $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', true);
                         }
                     }
                 }
@@ -222,6 +226,10 @@ class PdfSignatureService
             return;
         }
 
+        // FPDF's core fonts only render single-byte cp1252 — every status label but
+        // two contains a Unicode en-dash ("–"), which mojibakes without this.
+        $text = $this->toPdfEncoding($text);
+
         $fontSize = max(6, (int) round($h * 0.55));
         $pdf->SetFont('Helvetica', 'B', $fontSize);
 
@@ -238,7 +246,7 @@ class PdfSignatureService
 
         $pdf->SetTextColor(0, 0, 0);
         $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
-        $pdf->Cell($w, $fontSize, $text, 0, 0, 'C');
+        $pdf->Cell($w, $fontSize, $text, 0, 0, 'C', true);
     }
 
     /**
@@ -261,7 +269,10 @@ class PdfSignatureService
 
     /**
      * Truncates $text with an ellipsis until it fits within $w at the PDF's
-     * currently-set font. Caller must SetFont() beforehand.
+     * currently-set font. Caller must SetFont() beforehand. $text is expected to
+     * already be single-byte cp1252 (via toPdfEncoding()), so plain strlen/substr —
+     * not the mb_* equivalents — is what correctly counts/slices one character at
+     * a time here.
      */
     private function truncateToWidth(Fpdi $pdf, string $text, float $w): string
     {
@@ -269,10 +280,23 @@ class PdfSignatureService
             return $text;
         }
 
-        while (mb_strlen($text) > 1 && $pdf->GetStringWidth($text . '...') > $w) {
-            $text = mb_substr($text, 0, -1);
+        while (strlen($text) > 1 && $pdf->GetStringWidth($text . '...') > $w) {
+            $text = substr($text, 0, -1);
         }
 
         return rtrim($text) . '...';
+    }
+
+    /**
+     * FPDF's core fonts (Helvetica/Times/Courier) only support single-byte
+     * Windows-1252 encoding — text stamped raw as UTF-8 (e.g. the en-dash "–" in
+     * most AtpStatusLabels entries, or accented characters in a name) renders as
+     * mojibake. Convert before it reaches GetStringWidth()/Cell()/Write().
+     */
+    private function toPdfEncoding(string $text): string
+    {
+        $converted = @iconv('UTF-8', 'CP1252//TRANSLIT', $text);
+
+        return $converted !== false ? $converted : $text;
     }
 }

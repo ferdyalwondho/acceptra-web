@@ -22,6 +22,8 @@ class ApprovalStep extends Model
         'signature_id',
         'punchlist_notes',
         'reject_reason',
+        'evidence_path',
+        'evidence_original_filename',
         'is_offline',
         'offline_date',
         'offline_approver_name',

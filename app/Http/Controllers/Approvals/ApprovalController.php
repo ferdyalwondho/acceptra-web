@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\ProfileController;
 use App\Jobs\NotifyAdminsJob;
 use App\Jobs\NotifyApproverTurnJob;
+use App\Jobs\NotifyPartnerJob;
 use App\Models\ApprovalStep;
 use App\Models\Document;
 use App\Models\InAppNotification;
@@ -63,17 +64,23 @@ class ApprovalController extends Controller
             // An approver's queue includes both their active approval step AND any
             // pending punchlist verification — the latter has no active ApprovalStep
             // (the approval chain already finished), so it needs its own clause here
-            // or it silently never appears in the list.
+            // or it silently never appears in the list. A PunchlistVerification row
+            // stays 'pending' through the whole '14' (awaiting upload) AND '15'
+            // (awaiting verification) window, so it must also be scoped to '15' —
+            // otherwise a not-yet-actionable '14' document wrongly shows up here too.
             $docs = Document::with(['partner', 'approvalSteps.approver'])
                 ->where(function ($q) use ($user) {
                     $q->whereHas('approvalSteps', fn ($sq) =>
                             $sq->where('approver_id', $user->id)
                                ->where('is_active', true)
                         )
-                        ->orWhereHas('punchlistVerifications', fn ($pq) =>
-                            $pq->where('approver_id', $user->id)
-                               ->where('status', 'pending')
-                        );
+                        ->orWhere(function ($oq) use ($user) {
+                            $oq->where('status_code', '15')
+                                ->whereHas('punchlistVerifications', fn ($pq) =>
+                                    $pq->where('approver_id', $user->id)
+                                       ->where('status', 'pending')
+                                );
+                        });
                 })
                 ->orderByDesc('date_atp_submission')
                 ->get();
@@ -99,7 +106,7 @@ class ApprovalController extends Controller
             'skipped'                 => 'Skipped',
         ];
 
-        $items = Document::with(['approvalSteps'])
+        $items = Document::with(['approvalSteps', 'punchlistVerifications'])
             ->whereHas('approvalSteps', fn ($q) =>
                 $q->where('approver_id', $user->id)
                   ->whereIn('status', ['approved', 'approved_with_punchlist', 'rejected', 'offline_approved', 'skipped'])
@@ -108,15 +115,32 @@ class ApprovalController extends Controller
             ->limit(100)
             ->get()
             ->map(function (Document $doc) use ($user, $actionLabels) {
-                $myStep = $doc->approvalSteps->firstWhere('approver_id', $user->id);
+                $myStep         = $doc->approvalSteps->firstWhere('approver_id', $user->id);
+                $myVerification = $doc->punchlistVerifications->firstWhere('approver_id', $user->id);
+
+                // A punchlist verification action supersedes the frozen ApprovalStep
+                // status ('approved_with_punchlist' never changes once set) — reflect
+                // what the approver actually did most recently instead of stale history.
+                $myAction = match ($myVerification?->status) {
+                    'verified' => 'Punchlist Revision Verified',
+                    'rejected' => 'Punchlist Revision Rejected',
+                    default    => $actionLabels[$myStep?->status] ?? $myStep?->status ?? '—',
+                };
+                $myDateRaw = match ($myVerification?->status) {
+                    'verified' => $myVerification->verified_at,
+                    'rejected' => $myVerification->updated_at,
+                    default    => $myStep?->action_at,
+                };
+
                 return [
                     'id'         => $doc->id,
                     'uniqueId'   => $doc->unique_id,
                     'project'    => $doc->link_name ?? $doc->pt_index,
                     'sow'        => $doc->sow_name,
                     'statusCode' => $doc->status_code,
-                    'myAction'   => $actionLabels[$myStep?->status] ?? $myStep?->status ?? '—',
-                    'myDate'     => $myStep?->action_at?->format('d M Y') ?? '—',
+                    'myAction'   => $myAction,
+                    'myDate'     => $myDateRaw?->format('d M Y') ?? '—',
+                    'myDateSort' => $myDateRaw?->toISOString(),
                 ];
             })
             ->values()
@@ -144,10 +168,15 @@ class ApprovalController extends Controller
         $excelAttachment = $document->attachments->firstWhere('type', 'excel');
 
         // Show the previously-rejected PDF side by side only to the approver whose
-        // level actually rejected it — not any other level in the chain.
+        // level actually rejected it — not any other level in the chain. Also shown
+        // to Admin reviewing a punchlist revision's L1 gate (status '17'), which
+        // deliberately never sets previous_pdf_rejected_level.
         $showPreviousPdf = $document->previous_pdf_path
             && $activeStep
-            && (int) $document->previous_pdf_rejected_level === (int) $activeStep->level_order;
+            && (
+                (int) $document->previous_pdf_rejected_level === (int) $activeStep->level_order
+                || ($document->status_code === '17' && $activeStep->level_order === 1)
+            );
 
         $canAct     = false;
         $myStepDone = null;
@@ -233,6 +262,13 @@ class ApprovalController extends Controller
                     ->first();
 
                 $props['mode'] = 'verify';
+                // Verify mode always shows the pre-revision PDF side by side with the
+                // revision, if one exists — unlike $showPreviousPdf above (which is scoped
+                // to the reject-flow's L1 gate and requires an active step that doesn't
+                // exist here, since the approval chain already finished before verification).
+                $props['previous_pdf_url'] = $document->previous_pdf_path
+                    ? route('documents.pdf.previous', $document->id)
+                    : null;
                 $props['my_punchlist'] = $myStep ? [
                     'notes'      => $myStep->punchlist_notes,
                     'created_at' => $myStep->action_at?->toISOString(),
@@ -272,16 +308,25 @@ class ApprovalController extends Controller
         $request->validate([
             'action'          => ['required', 'in:approve,approve_with_punchlist'],
             'punchlist_notes' => ['required_if:action,approve_with_punchlist', 'nullable', 'string'],
+            'evidence_file'   => ['required_if:action,approve_with_punchlist', 'nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
             'signature_id'    => ['nullable', 'uuid'],
             'signature_data'  => ['nullable', 'string'],
         ]);
 
         $action = $request->input('action');
 
+        $evidencePath = null;
+        $evidenceName = null;
+        if ($request->hasFile('evidence_file')) {
+            $evidenceFile = $request->file('evidence_file');
+            $evidencePath = $evidenceFile->store('documents/approval-evidence');
+            $evidenceName = $evidenceFile->getClientOriginalName();
+        }
+
         $nextStep               = null;
         $routingPendingTriggered = false;
 
-        DB::transaction(function () use ($user, $document, $activeStep, $action, $request, &$nextStep, &$routingPendingTriggered) {
+        DB::transaction(function () use ($user, $document, $activeStep, $action, $request, $evidencePath, $evidenceName, &$nextStep, &$routingPendingTriggered) {
             // Resolve signature: use existing ID, or save new base64 data
             $signatureId = $request->input('signature_id');
             if (! $signatureId && $request->filled('signature_data')) {
@@ -302,12 +347,14 @@ class ApprovalController extends Controller
             }
 
             $activeStep->update([
-                'status'          => $action === 'approve' ? 'approved' : 'approved_with_punchlist',
-                'punchlist_notes' => $action === 'approve_with_punchlist' ? $request->input('punchlist_notes') : null,
-                'action_at'       => now(),
-                'is_active'       => false,
-                'signature_id'    => $signatureId,
-                'approver_id'     => $activeStep->approver_id ?? $user->id,
+                'status'                      => $action === 'approve' ? 'approved' : 'approved_with_punchlist',
+                'punchlist_notes'             => $action === 'approve_with_punchlist' ? $request->input('punchlist_notes') : null,
+                'evidence_path'               => $evidencePath,
+                'evidence_original_filename'  => $evidenceName,
+                'action_at'                   => now(),
+                'is_active'                   => false,
+                'signature_id'                => $signatureId,
+                'approver_id'                 => $activeStep->approver_id ?? $user->id,
             ]);
 
             // Every approve changes the signature and/or status_code (both get stamped
@@ -321,8 +368,28 @@ class ApprovalController extends Controller
                 ->orderBy('level_order')
                 ->first();
 
-            if ($nextStep) {
-                $advanceCode = str_pad($activeStep->level_order * 3 + 1, 2, '0', STR_PAD_LEFT);
+            if ($document->status_code === '17' && $activeStep->level_order === 1) {
+                // L1 gate for a Subcon-uploaded punchlist revision — a sanity check only,
+                // not a resume of the frozen L2-L4 chain. Once approved, the document
+                // moves straight to placement for the new PDF (reusing the same
+                // routing_pending/RoutingPanel machinery as the reject-flow's L1 gate).
+                $document->update(['status_code' => '14', 'routing_pending' => true]);
+                $routingPendingTriggered = true;
+            } elseif ($nextStep) {
+                // The whole chain restarts from L1 after any rejection (BR: reject never
+                // resumes mid-chain), so every level reached during that restart is a
+                // "Done Rectification" re-review, not a first-time look — regardless of
+                // which specific level originally rejected it.
+                $isRectificationCycle = $document->previous_pdf_rejected_level !== null;
+                $advanceCode = $isRectificationCycle
+                    ? str_pad($nextStep->level_order * 3, 2, '0', STR_PAD_LEFT)
+                    : str_pad(($nextStep->level_order - 1) * 3 + 1, 2, '0', STR_PAD_LEFT);
+
+                // Signature placement is a per-PDF (not per-level) concern — redo it the first
+                // time any step tries to go active after the PDF changed, regardless of which
+                // level that is; once Admin completes routing this stays clear for the rest of
+                // the chain in the same cycle.
+                $needsPlacementRedo = ($document->template_snapshot['placement']['status'] ?? 'pending') !== 'manual';
 
                 if ($nextStep->approver_id === null) {
                     // Partner-submitted document reaching the next level for the first time —
@@ -354,6 +421,11 @@ class ApprovalController extends Controller
                     // is_active stays false until the Admin finishes signature placement via
                     // "complete routing" — routing_pending now purely means "placement pending",
                     // since PICs are already resolved and assigned above.
+                    $document->update(['status_code' => $advanceCode, 'routing_pending' => true]);
+                    $routingPendingTriggered = true;
+                } elseif ($needsPlacementRedo) {
+                    // PICs already assigned — only signature placement needs redoing before
+                    // this (previously rejected, now revised) level goes live.
                     $document->update(['status_code' => $advanceCode, 'routing_pending' => true]);
                     $routingPendingTriggered = true;
                 } else {
@@ -427,6 +499,7 @@ class ApprovalController extends Controller
         }
 
         $flash = match (true) {
+            $routingPendingTriggered && $document->fresh()->status_code === '14' => 'Punchlist revision approved. Signature placement is needed before verification can proceed.',
             $routingPendingTriggered => 'L1 approved. This document needs approver routing (L2–L4) assigned before it can proceed.',
             $nextStep !== null => 'Approval recorded. Next approver has been notified.',
             $document->fresh()->status_code === '14' => 'ATP Done with Punchlist. Admin can now upload the revised document.',
@@ -453,24 +526,64 @@ class ApprovalController extends Controller
 
         $request->validate([
             'reject_reason' => ['required', 'string'],
+            'evidence_file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240'],
         ]);
 
-        DB::transaction(function () use ($user, $document, $activeStep, $request) {
+        $evidenceFile = $request->file('evidence_file');
+        $evidencePath = $evidenceFile->store('documents/approval-evidence');
+        $evidenceName = $evidenceFile->getClientOriginalName();
+
+        $isL1Gate          = false;
+        $isPunchlistL1Gate = false;
+
+        DB::transaction(function () use ($user, $document, $activeStep, $request, $evidencePath, $evidenceName, &$isL1Gate, &$isPunchlistL1Gate) {
             $activeStep->update([
-                'status'        => 'rejected',
-                'reject_reason' => $request->input('reject_reason'),
-                'action_at'     => now(),
-                'is_active'     => false,
-                'approver_id'   => $activeStep->approver_id ?? $user->id,
+                'status'                      => 'rejected',
+                'reject_reason'               => $request->input('reject_reason'),
+                'evidence_path'               => $evidencePath,
+                'evidence_original_filename'  => $evidenceName,
+                'action_at'                   => now(),
+                'is_active'                   => false,
+                'approver_id'                 => $activeStep->approver_id ?? $user->id,
             ]);
 
-            $rejectCode = str_pad($activeStep->level_order * 3 - 1, 2, '0', STR_PAD_LEFT);
+            // Rejecting the L1 gate of a Subcon-uploaded punchlist revision is a distinct
+            // case from the reject-flow's own L1 gate below — it must never fall through to
+            // that branch (which reads previous_pdf_rejected_level, reserved for reject-flow
+            // semantics only) and simply reverts to '14' so the Subcon can re-upload.
+            $isPunchlistL1Gate = $activeStep->level_order === 1 && $document->status_code === '17';
+
+            if ($isPunchlistL1Gate) {
+                $document->update(['status_code' => '14', 'final_pdf_path' => null]);
+
+                AuditService::log(
+                    $document->id,
+                    'step.rejected',
+                    "Punchlist revision rejected at L1 review by {$user->name}: {$request->input('reject_reason')}. Subcon must re-upload.",
+                    ['level' => $activeStep->level_order],
+                    $user->id,
+                );
+
+                return;
+            }
+
+            // Rejecting L1's re-review gate (a Partner's revision of a document rejected at
+            // a higher level) reverts to THAT level's rejection code, not L1's own '02' — so
+            // the memory of "L{n} actually needs to review this" isn't lost. L1 rejecting its
+            // own genuine first-time review (previous_pdf_rejected_level null or ===1) behaves
+            // exactly as before.
+            $isL1Gate    = $activeStep->level_order === 1 && ($document->previous_pdf_rejected_level ?? 1) > 1;
+            $rejectLevel = $isL1Gate ? $document->previous_pdf_rejected_level : $activeStep->level_order;
+            $rejectCode  = str_pad($rejectLevel * 3 - 1, 2, '0', STR_PAD_LEFT);
+
             $document->update(['status_code' => $rejectCode, 'final_pdf_path' => null]);
 
             AuditService::log(
                 $document->id,
                 'step.rejected',
-                "Step L{$activeStep->level_order} rejected by {$user->name}: {$request->input('reject_reason')}",
+                $isL1Gate
+                    ? "Revision rejected at L1 review by {$user->name}: {$request->input('reject_reason')}. Reverting to L{$rejectLevel} rejected — Partner must resubmit."
+                    : "Step L{$activeStep->level_order} rejected by {$user->name}: {$request->input('reject_reason')}",
                 ['level' => $activeStep->level_order],
                 $user->id,
             );
@@ -482,10 +595,56 @@ class ApprovalController extends Controller
             ->where('is_read', false)
             ->update(['is_read' => true, 'read_at' => now()]);
 
-        NotifyAdminsJob::dispatch($document->fresh(), 'rejected');
+        if ($isPunchlistL1Gate || $isL1Gate) {
+            NotifyPartnerJob::dispatch($document->fresh(), 'rejected_for_revision');
+        } else {
+            NotifyAdminsJob::dispatch($document->fresh(), 'rejected');
+        }
+
+        if ($isPunchlistL1Gate) {
+            return redirect()->route('approvals.index')
+                ->with('success', 'Punchlist revision rejected. The Subcon has been notified to re-upload.');
+        }
 
         return redirect()->route('approvals.index')
-            ->with('success', 'Revision rejected. Admin Aviat has been notified.');
+            ->with('success', $isL1Gate
+                ? 'Revision rejected. The Partner has been notified to resubmit.'
+                : 'Revision rejected. Admin Aviat has been notified.');
+    }
+
+    // GET /documents/{id}/approval-steps/{stepId}/evidence
+    public function downloadEvidence(Request $request, string $documentId, string $stepId)
+    {
+        $user     = $request->user();
+        $document = Document::with('approvalSteps')->findOrFail($documentId);
+        $step     = $document->approvalSteps->firstWhere('id', $stepId);
+
+        abort_if(! $step, 404);
+        $this->authorizeEvidenceAccess($user, $document);
+
+        abort_if(! $step->evidence_path || ! Storage::exists($step->evidence_path), 404, 'Evidence file not found.');
+
+        return Storage::download($step->evidence_path, $step->evidence_original_filename ?? 'evidence');
+    }
+
+    private function authorizeEvidenceAccess(object $user, Document $document): void
+    {
+        if (in_array($user->role, [...self::ADMIN_ROLES, 'viewer'])) {
+            return;
+        }
+
+        if ($user->role === 'partner') {
+            abort_if($document->submitted_by !== $user->id, 403);
+            return;
+        }
+
+        if (in_array($user->role, self::APPROVER_ROLES)) {
+            $isInvolved = $document->approvalSteps->contains(fn ($step) => $step->approver_id === $user->id);
+            abort_if(! $isInvolved, 403);
+            return;
+        }
+
+        abort(403);
     }
 
     private function authorizeApprovalAccess(object $user, Document $document): void

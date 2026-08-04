@@ -21,6 +21,7 @@ class AtpStatusLabels
         '14'    => 'ATP Done with Punchlist – Need Rectification',
         '15'    => 'Punchlist Revised – Waiting Verification',
         '16'    => 'Closed – Punchlist Verified',
+        '17'    => 'Punchlist Revision – On Review L1',
         'draft' => 'Draft',
     ];
 
