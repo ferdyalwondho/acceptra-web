@@ -624,7 +624,7 @@ class ApprovalController extends Controller
 
         abort_if(! $step->evidence_path || ! Storage::exists($step->evidence_path), 404, 'Evidence file not found.');
 
-        return Storage::download($step->evidence_path, $step->evidence_original_filename ?? 'evidence');
+        return Storage::response($step->evidence_path, $step->evidence_original_filename ?? 'evidence');
     }
 
     private function authorizeEvidenceAccess(object $user, Document $document): void

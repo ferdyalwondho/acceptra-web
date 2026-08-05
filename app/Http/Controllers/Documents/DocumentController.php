@@ -564,7 +564,12 @@ class DocumentController extends Controller
             'new_approver_id' => [
                 'required',
                 'uuid',
-                Rule::exists('users', 'id')->where('role', $step->role)->where('status', 'active'),
+                Rule::exists('users', 'id')->where('role', $step->role)->where(function ($query) {
+                    $query->where('status', 'active')
+                        ->orWhere(function ($q) {
+                            $q->where('status', 'inactive')->whereNull('email_verified_at');
+                        });
+                }),
             ],
         ], [
             'new_approver_id.required' => 'Please select a new approver.',

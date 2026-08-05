@@ -53,6 +53,31 @@ function formatDate(iso: string | null | undefined): string | undefined {
   return new Date(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function isImageEvidence(filename: string | null | undefined): boolean {
+  return /\.(jpe?g|png)$/i.test(filename ?? '');
+}
+
+/** Evidence photo/PDF attached to a reject or approve-with-punchlist action. Images render as a
+ *  clickable thumbnail; PDFs fall back to a plain link — both open the full file in a new tab. */
+function EvidencePreview({ url, filename, label }: { url: string; filename: string | null | undefined; label: string }) {
+  if (isImageEvidence(filename)) {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="mt-1.5 inline-block">
+        <img
+          src={url}
+          alt={label}
+          className="h-24 w-24 rounded-md border border-[var(--color-border)] object-cover transition-opacity hover:opacity-80"
+        />
+      </a>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-ming hover:underline">
+      <Paperclip className="h-3 w-3" /> {label}
+    </a>
+  );
+}
+
 const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] transition-colors focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40';
 
 /* ── Manual Placement Panel ─────────────────────────────────────────────── */
@@ -1215,14 +1240,11 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                               {s.punchlist_notes}
                             </p>
                             {s.evidence_path && (
-                              <a
-                                href={`/documents/${doc.id}/approval-steps/${s.id}/evidence`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-ming hover:underline"
-                              >
-                                <Paperclip className="h-3 w-3" /> {t('documents.show.preview_evidence')}
-                              </a>
+                              <EvidencePreview
+                                url={`/documents/${doc.id}/approval-steps/${s.id}/evidence`}
+                                filename={s.evidence_original_filename}
+                                label={t('documents.show.preview_evidence')}
+                              />
                             )}
                           </div>
                         ))}
@@ -1235,14 +1257,11 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                             {failedVerification.notes && (
                               <p className="mb-1.5 whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">{failedVerification.notes}</p>
                             )}
-                            <a
-                              href={`/documents/${doc.id}/punchlist-verifications/${failedVerification.id}/evidence`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 text-xs font-medium text-ming hover:underline"
-                            >
-                              <Paperclip className="h-3 w-3" /> {t('documents.show.preview_evidence')}
-                            </a>
+                            <EvidencePreview
+                              url={`/documents/${doc.id}/punchlist-verifications/${failedVerification.id}/evidence`}
+                              filename={failedVerification.evidence_original_filename}
+                              label={t('documents.show.preview_evidence')}
+                            />
                           </div>
                         ) : null;
                       })()}
@@ -1312,6 +1331,13 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                       <p className="whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">
                         {rejectedStep.reject_reason}
                       </p>
+                      {rejectedStep.evidence_path && (
+                        <EvidencePreview
+                          url={`/documents/${doc.id}/approval-steps/${rejectedStep.id}/evidence`}
+                          filename={rejectedStep.evidence_original_filename}
+                          label={t('documents.show.preview_evidence')}
+                        />
+                      )}
                     </div>
                   )}
                 </div>
