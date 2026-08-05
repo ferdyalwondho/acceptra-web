@@ -127,6 +127,6 @@ class PunchlistController extends Controller
 
         abort_if(! $verification->evidence_path || ! Storage::exists($verification->evidence_path), 404, 'Evidence file not found.');
 
-        return Storage::download($verification->evidence_path, $verification->evidence_original_filename ?? 'evidence');
+        return Storage::response($verification->evidence_path, $verification->evidence_original_filename ?? 'evidence');
     }
 }
