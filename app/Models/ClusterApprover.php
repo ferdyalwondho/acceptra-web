@@ -33,10 +33,11 @@ class ClusterApprover extends Model
         return $this->belongsTo(User::class);
     }
 
-    // Only rows whose user is currently active hold their (cluster, role) slot —
-    // deactivated users' rows are kept as history but no longer occupy the slot.
+    // Only rows whose user is still assignable (active, or invited but not yet activated)
+    // hold their (cluster, role) slot — users who were active and later deactivated no
+    // longer occupy it, freeing it up for a replacement.
     public function scopeActiveHolder(Builder $query): Builder
     {
-        return $query->whereHas('user', fn (Builder $q) => $q->where('status', 'active'));
+        return $query->whereHas('user', fn (Builder $q) => $q->assignable());
     }
 }
