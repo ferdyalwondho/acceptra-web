@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Document;
 use App\Models\Signature;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use setasign\Fpdi\Fpdi;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -30,8 +31,15 @@ class PdfSignatureService
         if (! $document->final_pdf_path || ! Storage::exists($document->final_pdf_path)) {
             try {
                 $this->generateAndUpload($document);
-            } catch (\Throwable) {
-                // Fall through — the key resolution below falls back to the original.
+            } catch (\Throwable $e) {
+                // Fall through — the key resolution below falls back to the original —
+                // but log it, otherwise a stamping failure looks identical to "nothing to
+                // stamp yet" from the outside and silently keeps serving the original PDF
+                // on every request.
+                Log::error('PdfSignatureService: final PDF generation failed', [
+                    'document_id' => $document->id,
+                    'exception'   => $e->getMessage(),
+                ]);
             }
         }
 
@@ -133,11 +141,24 @@ class PdfSignatureService
      * otherwise. Ghostscript's pdfwrite re-write can shift page geometry or corrupt
      * embedded images (e.g. a scanned offline-approval signature), so it's only used as
      * a fallback for PDFs FPDI genuinely can't parse as-is — never unconditionally.
+     *
+     * Walks every page the same way stampOnto() does (import + template size + place),
+     * not just setSourceFile() — some malformed PDFs parse their xref table fine but
+     * fail later on a specific page's content stream, and testing setSourceFile() alone
+     * would wrongly call those "parsable", diverging from what stampOnto() actually does.
      */
     private function resolveFpdiSource(string $rawInputPath): string
     {
         try {
-            (new Fpdi('P', 'pt'))->setSourceFile($rawInputPath);
+            $pdf       = new Fpdi('P', 'pt');
+            $pageCount = $pdf->setSourceFile($rawInputPath);
+
+            for ($p = 1; $p <= $pageCount; $p++) {
+                $tplId = $pdf->importPage($p);
+                $size  = $pdf->getTemplateSize($tplId);
+                $pdf->AddPage('P', [$size['width'], $size['height']]);
+                $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height']);
+            }
 
             return $rawInputPath;
         } catch (\Throwable) {
@@ -170,21 +191,55 @@ class PdfSignatureService
 
         // tempnam() already creates the file — don't append an extension onto a
         // separate path string, or the original tempnam()-created file becomes an
-        // orphan that never gets cleaned up. None of gs/FPDI/Image() below need a
-        // file extension (Image()'s type is passed explicitly as $imgType).
-        $tempInput = tempnam(sys_get_temp_dir(), 'acc_orig_');
+        // orphan that never gets cleaned up.
+        $tempInput    = tempnam(sys_get_temp_dir(), 'acc_orig_');
         $tempParsable = null;
         $tempOutput   = null;
-        $tempSigFiles = [];
 
         try {
             file_put_contents($tempInput, Storage::get($document->original_pdf_path));
 
-            $tempParsable = $this->resolveFpdiSource($tempInput);
+            try {
+                // Prefer the raw original — Ghostscript's pdfwrite re-write can shift page
+                // geometry or corrupt embedded images (e.g. a scanned offline-approval
+                // signature). Only retried against a Ghostscript-normalized copy if the raw
+                // file trips up FPDI's free parser anywhere in the full stamping pass (not
+                // just at file-open time — some malformed PDFs parse their xref fine but
+                // fail later, e.g. importing a specific page's content stream).
+                $tempOutput = $this->stampOnto($tempInput, $document, $positions);
+            } catch (\Throwable) {
+                $tempParsable = $this->decompressPdf($tempInput);
+                $tempOutput   = $this->stampOnto($tempParsable, $document, $positions);
+            }
 
+            $relPath = "documents/final/{$document->id}.pdf";
+            Storage::put($relPath, file_get_contents($tempOutput));
+
+            $document->update(['final_pdf_path' => $relPath]);
+        } finally {
+            @unlink($tempInput);
+            if ($tempParsable) {
+                @unlink($tempParsable);
+            }
+            if ($tempOutput) {
+                @unlink($tempOutput);
+            }
+        }
+    }
+
+    /**
+     * Runs the full FPDI import + stamp pass against $sourcePath and returns the local
+     * temp path of the resulting PDF. Throws on any FPDI failure — callers decide whether
+     * to retry against a different source.
+     */
+    private function stampOnto(string $sourcePath, Document $document, array $positions): string
+    {
+        $tempSigFiles = [];
+
+        try {
             $pdf       = new Fpdi('P', 'pt');
             $pdf->SetFillColor(255, 255, 255);
-            $pageCount = $pdf->setSourceFile($tempParsable);
+            $pageCount = $pdf->setSourceFile($sourcePath);
 
             for ($p = 1; $p <= $pageCount; $p++) {
                 $tplId = $pdf->importPage($p);
@@ -265,18 +320,8 @@ class PdfSignatureService
             $tempOutput = tempnam(sys_get_temp_dir(), 'acc_final_');
             $pdf->Output($tempOutput, 'F');
 
-            $relPath = "documents/final/{$document->id}.pdf";
-            Storage::put($relPath, file_get_contents($tempOutput));
-
-            $document->update(['final_pdf_path' => $relPath]);
+            return $tempOutput;
         } finally {
-            @unlink($tempInput);
-            if ($tempParsable) {
-                @unlink($tempParsable);
-            }
-            if ($tempOutput) {
-                @unlink($tempOutput);
-            }
             foreach ($tempSigFiles as $f) {
                 @unlink($f);
             }
