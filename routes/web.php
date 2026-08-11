@@ -113,19 +113,16 @@ Route::middleware('auth')->group(function () {
             ['Content-Type' => 'application/pdf']
         );
     })->name('documents.pdf.previous');
-    // Always the raw, unsigned source PDF — used by the placement/re-placement editor so
-    // its canvas coordinates line up with what PdfSignatureService re-stamps onto, even
+    // The unsigned source PDF, normalized through the same Ghostscript pass
+    // PdfSignatureService applies before stamping — used by the placement/re-placement
+    // editor so its canvas coordinates line up with what actually gets stamped, even
     // once a signed final_pdf_path already exists for a completed document.
     Route::get('/documents/{id}/pdf/original', function (string $id) {
         $document = \App\Models\Document::findOrFail($id);
         abort_if(! in_array(auth()->user()->role, ['admin', 'super_admin']), 403);
         abort_if(! $document->original_pdf_path, 404);
 
-        return \Illuminate\Support\Facades\Storage::response(
-            $document->original_pdf_path,
-            'original.pdf',
-            ['Content-Type' => 'application/pdf']
-        );
+        return (new \App\Services\PdfSignatureService())->streamNormalizedOriginal($document);
     })->name('documents.pdf.original');
     Route::post('/documents/{id}/reassign',            [DocumentController::class, 'reassign'])->name('documents.reassign');
     Route::post('/documents/{id}/revise',              [DocumentController::class, 'revise'])->name('documents.revise');
