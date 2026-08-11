@@ -4,6 +4,7 @@ RUN apk add --no-cache \
     bash \
     curl \
     ghostscript \
+    qpdf \
     libpng-dev \
     libzip-dev \
     oniguruma-dev \
