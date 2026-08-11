@@ -218,8 +218,6 @@ class ApprovalController extends Controller
             'requiresSignature' => (bool) ($activeStep?->requires_signature ?? false),
         ];
 
-        $placement = $document->template_snapshot['placement'] ?? null;
-
         $activeSig = Signature::where('user_id', $user->id)
             ->where('is_active', true)
             ->first();
@@ -241,9 +239,6 @@ class ApprovalController extends Controller
                 : null,
             'previous_pdf_url' => $showPreviousPdf
                 ? route('documents.pdf.previous', $document->id)
-                : null,
-            'placements'       => ($placement && ! empty($placement['positions']))
-                ? $placement['positions']
                 : null,
         ];
 
@@ -634,7 +629,7 @@ class ApprovalController extends Controller
         }
 
         if ($user->role === 'partner') {
-            abort_if($document->submitted_by !== $user->id, 403);
+            abort_if(! $document->accessibleByPartner($user), 403);
             return;
         }
 

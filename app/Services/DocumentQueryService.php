@@ -26,7 +26,11 @@ class DocumentQueryService
 
         // 1. Role scoping
         if ($user->role === 'partner') {
-            $query->where('submitted_by', $user->id);
+            // Documents they personally submitted, or any document assigned to their
+            // partner org (covers docs an Admin submitted/imported on their behalf).
+            $query->where(fn (Builder $q) => $q
+                ->where('submitted_by', $user->id)
+                ->orWhere('partner_id', $user->partner_id));
         } elseif (str_starts_with($user->role, 'approver_')) {
             $query->whereHas('approvalSteps', fn ($q) => $q->where('approver_id', $user->id));
         }

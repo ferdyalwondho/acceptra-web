@@ -12,7 +12,7 @@ class PdfSignatureService
 {
     /**
      * Coordinates in template_snapshot are saved at this PDF.js viewport scale.
-     * Must match SAVE_SCALE in PdfViewer.tsx.
+     * Must match SAVE_SCALE in the PlacementPanel component (resources/js/Pages/Documents/Show.tsx).
      */
     private const SAVE_SCALE = 1.4;
 
@@ -39,7 +39,34 @@ class PdfSignatureService
             ? $document->final_pdf_path
             : $document->original_pdf_path;
 
-        return Storage::response($key, basename($key), ['Content-Type' => 'application/pdf']);
+        return Storage::response($key, self::buildDownloadFilename($document), ['Content-Type' => 'application/pdf']);
+    }
+
+    /**
+     * AVIAT_ATP_[SOW_NAME]_[LINK_ID]_[PROJECT_CODE]_[PT_INDEX].pdf — sanitized so every
+     * segment is filesystem-safe; missing nullable fields fall back to "NA".
+     */
+    public static function buildDownloadFilename(Document $document, string $suffix = ''): string
+    {
+        $segment = function (?string $value): string {
+            $value = trim((string) $value);
+            if ($value === '') {
+                return 'NA';
+            }
+
+            $value = preg_replace('/\s+/', '_', $value);
+
+            return preg_replace('/[^A-Za-z0-9_-]/', '', $value) ?: 'NA';
+        };
+
+        $parts = [
+            $segment($document->sow_name),
+            $segment($document->link_id),
+            $segment($document->project_code),
+            $segment($document->pt_index),
+        ];
+
+        return 'AVIAT_ATP_' . implode('_', $parts) . $suffix . '.pdf';
     }
 
     /**

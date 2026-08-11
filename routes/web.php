@@ -81,7 +81,7 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/documents/{id}',           [DocumentController::class, 'show'])->name('documents.show');
     Route::get('/documents/{id}/edit',      [DocumentController::class, 'edit'])->name('documents.edit');
-    Route::put('/documents/{id}',           fn () => redirect()->back())->name('documents.update');
+    Route::put('/documents/{id}',           [DocumentController::class, 'update'])->name('documents.update');
     Route::delete('/documents/{id}',        [DocumentController::class, 'destroy'])->name('documents.destroy');
     Route::get('/documents/{id}/audit', function (string $id) {
         return redirect()->route('documents.show', ['id' => $id, 'tab' => 'audit-trail']);
@@ -89,7 +89,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/{id}/pdf', function (string $id) {
         $document = \App\Models\Document::findOrFail($id);
         abort_if(
-            auth()->user()->role === 'partner' && $document->submitted_by !== auth()->id(),
+            auth()->user()->role === 'partner' && ! $document->accessibleByPartner(auth()->user()),
             403
         );
         abort_if(! $document->original_pdf_path, 404);
@@ -99,7 +99,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/{id}/pdf/previous', function (string $id) {
         $document = \App\Models\Document::findOrFail($id);
         abort_if(
-            auth()->user()->role === 'partner' && $document->submitted_by !== auth()->id(),
+            auth()->user()->role === 'partner' && ! $document->accessibleByPartner(auth()->user()),
             403
         );
         abort_if(
@@ -109,10 +109,24 @@ Route::middleware('auth')->group(function () {
 
         return \Illuminate\Support\Facades\Storage::response(
             $document->previous_pdf_path,
-            'previous.pdf',
+            \App\Services\PdfSignatureService::buildDownloadFilename($document, '_PREVIOUS'),
             ['Content-Type' => 'application/pdf']
         );
     })->name('documents.pdf.previous');
+    // Always the raw, unsigned source PDF — used by the placement/re-placement editor so
+    // its canvas coordinates line up with what PdfSignatureService re-stamps onto, even
+    // once a signed final_pdf_path already exists for a completed document.
+    Route::get('/documents/{id}/pdf/original', function (string $id) {
+        $document = \App\Models\Document::findOrFail($id);
+        abort_if(! in_array(auth()->user()->role, ['admin', 'super_admin']), 403);
+        abort_if(! $document->original_pdf_path, 404);
+
+        return \Illuminate\Support\Facades\Storage::response(
+            $document->original_pdf_path,
+            'original.pdf',
+            ['Content-Type' => 'application/pdf']
+        );
+    })->name('documents.pdf.original');
     Route::post('/documents/{id}/reassign',            [DocumentController::class, 'reassign'])->name('documents.reassign');
     Route::post('/documents/{id}/revise',              [DocumentController::class, 'revise'])->name('documents.revise');
     Route::post('/documents/{id}/submit',               [DocumentController::class, 'submit'])->name('documents.submit');

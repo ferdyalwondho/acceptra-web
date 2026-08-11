@@ -144,9 +144,9 @@ class DocumentController extends Controller
         $document = Document::with(['partner', 'submitter', 'template', 'approvalSteps.approver', 'punchlistVerifications.approver'])
             ->findOrFail($id);
 
-        // Basic access: partner sees only own docs; others see all (full RBAC in later FR)
+        // Basic access: partner sees only their org's docs; others see all (full RBAC in later FR)
         if ($user->role === 'partner') {
-            abort_if($document->submitted_by !== $user->id, 403);
+            abort_if(! $document->accessibleByPartner($user), 403);
         }
 
         $placement    = $document->template_snapshot['placement'] ?? [];
@@ -157,6 +157,12 @@ class DocumentController extends Controller
         if ($needsManual && $document->original_pdf_path) {
             $pdfSignedUrl = route('documents.pdf', $document->id);
         }
+
+        // Always available (admin-only route) — used by the Re-placement modal so its
+        // canvas always renders the unsigned source PDF, regardless of placement/completion status.
+        $originalPdfUrl = ($document->original_pdf_path && in_array($user->role, self::ADMIN_ROLES))
+            ? route('documents.pdf.original', $document->id)
+            : null;
 
         $excelAttachment = $document->attachments()->where('type', 'excel')->first();
 
@@ -232,6 +238,7 @@ class DocumentController extends Controller
             ],
             'anchor_failed'    => $needsManual,
             'pdf_url'          => $pdfSignedUrl,
+            'original_pdf_url' => $originalPdfUrl,
             'excel_attachment' => $excelAttachment ? [
                 'id'                => $excelAttachment->id,
                 'original_filename' => $excelAttachment->original_filename,
@@ -239,6 +246,10 @@ class DocumentController extends Controller
             ] : null,
             'audit_logs'  => $auditLogs,
             'initial_tab' => $request->query('tab', 'overview'),
+            // For the Edit Info modal's Partner dropdown — only admins can edit metadata.
+            'partners' => in_array($user->role, self::ADMIN_ROLES)
+                ? Partner::where('status', 'active')->orderBy('name')->get(['id', 'name'])
+                : [],
         ]);
     }
 
@@ -359,13 +370,13 @@ class DocumentController extends Controller
             ->findOrFail($id);
 
         $isAdmin              = in_array($user->role, self::ADMIN_ROLES);
-        $isOwningPartner      = $user->role === 'partner' && $document->submitted_by === $user->id;
+        $isOwningPartner      = $user->role === 'partner' && $document->accessibleByPartner($user);
         $isPunchlistRevision  = $document->status_code === '14';
         $isRejectedRevision   = (bool) preg_match('/^(02|05|08|11)$/', $document->status_code ?? '');
 
         // Authorization
         if (! $isAdmin) {
-            abort_if($document->submitted_by !== $user->id, 403);
+            abort_if(! $document->accessibleByPartner($user), 403);
         }
         // Both Admin and the owning Partner (Subcon) may upload a punchlist revision.
         abort_if($isPunchlistRevision && ! $isAdmin && ! $isOwningPartner, 403);
@@ -458,7 +469,7 @@ class DocumentController extends Controller
         $document = Document::with('approvalSteps')->findOrFail($id);
 
         $isAdmin         = in_array($user->role, self::ADMIN_ROLES);
-        $isOwningPartner = $user->role === 'partner' && $document->submitted_by === $user->id;
+        $isOwningPartner = $user->role === 'partner' && $document->accessibleByPartner($user);
 
         abort_if(! $isAdmin && ! $isOwningPartner, 403);
         abort_if($document->status_code !== '14', 422, 'Document is not in punchlist revision state.');
@@ -619,6 +630,84 @@ class DocumentController extends Controller
 
         return redirect()->route('documents.show', $document->id)
             ->with('success', 'Approver reassigned. New approver has been notified.');
+    }
+
+    // PUT /documents/{id} — Admin corrects metadata (Partner/Subcon, PT Index, Project Code,
+    // Link ID, Link Name) on a document that has already been submitted but is not yet
+    // fully done — covers the common case of a typo made at submission time.
+    public function update(Request $request, string $id): RedirectResponse
+    {
+        $user     = $request->user();
+        $document = Document::findOrFail($id);
+
+        abort_if(! in_array($user->role, self::ADMIN_ROLES), 403);
+        abort_if(
+            $document->status_code === 'draft' || in_array($document->status_code, ['13', '16']),
+            422,
+            'Document metadata cannot be edited in its current state.'
+        );
+
+        $validated = $request->validate([
+            'partner_id'   => ['required', 'uuid', 'exists:partners,id'],
+            'pt_index'     => ['required', 'string', 'max:100', Rule::unique('documents', 'pt_index')->ignore($document->id)],
+            'project_code' => ['required', 'string', 'max:100'],
+            'link_id'      => ['required', 'string', 'max:100'],
+            'link_name'    => ['required', 'string', 'max:200'],
+        ], [
+            'partner_id.required'   => 'Please select a partner.',
+            'pt_index.required'     => 'PT Index is required.',
+            'pt_index.unique'       => 'This PT Index is already in use — please choose another one.',
+            'project_code.required' => 'Project Code is required.',
+            'link_id.required'      => 'Link ID is required.',
+            'link_name.required'    => 'Link Name is required.',
+        ]);
+
+        $changed = [];
+        foreach ($validated as $field => $newValue) {
+            if ($document->$field !== $newValue) {
+                $changed[$field] = ['old' => $document->$field, 'new' => $newValue];
+            }
+        }
+
+        if (empty($changed)) {
+            return redirect()->route('documents.show', $document->id)
+                ->with('success', 'Tidak ada perubahan untuk disimpan.');
+        }
+
+        $document->update($validated);
+
+        // Human-readable audit description — resolve partner_id to its name rather than
+        // logging raw uuids, mirroring how other audit entries in this controller narrate
+        // the change in the description and keep structured data in metadata.
+        $partnerNames = isset($changed['partner_id'])
+            ? Partner::whereIn('id', [$changed['partner_id']['old'], $changed['partner_id']['new']])->pluck('name', 'id')
+            : collect();
+
+        $fieldLabels = [
+            'partner_id'   => 'Partner',
+            'pt_index'     => 'PT Index',
+            'project_code' => 'Project Code',
+            'link_id'      => 'Link ID',
+            'link_name'    => 'Link Name',
+        ];
+
+        $summary = collect($changed)->map(function ($v, $field) use ($fieldLabels, $partnerNames) {
+            $old = $field === 'partner_id' ? ($partnerNames[$v['old']] ?? '—') : ($v['old'] ?? '—');
+            $new = $field === 'partner_id' ? ($partnerNames[$v['new']] ?? '—') : ($v['new'] ?? '—');
+
+            return "{$fieldLabels[$field]}: {$old} → {$new}";
+        })->implode('; ');
+
+        AuditService::log(
+            $document->id,
+            'document.metadata_updated',
+            "Metadata dokumen diperbarui oleh {$user->name}: {$summary}",
+            ['changed' => $changed],
+            $user->id,
+        );
+
+        return redirect()->route('documents.show', $document->id)
+            ->with('success', 'Metadata dokumen berhasil diperbarui.');
     }
 
     // POST /documents
@@ -782,9 +871,9 @@ class DocumentController extends Controller
         $user     = $request->user();
         $document = Document::findOrFail($id);
 
-        // Authorization: partner owns doc, or admin can revise any
+        // Authorization: partner's org owns doc, or admin can revise any
         if (! in_array($user->role, self::ADMIN_ROLES)) {
-            abort_if($document->submitted_by !== $user->id, 403);
+            abort_if(! $document->accessibleByPartner($user), 403);
         }
 
         $isAdmin = in_array($user->role, self::ADMIN_ROLES);
@@ -933,7 +1022,7 @@ class DocumentController extends Controller
         $document = Document::with('approvalSteps')->findOrFail($id);
 
         if (! in_array($user->role, self::ADMIN_ROLES)) {
-            abort_if($document->submitted_by !== $user->id, 403);
+            abort_if(! $document->accessibleByPartner($user), 403);
         }
 
         abort_if($document->status_code !== 'draft', 422, 'Document is not in draft state.');
@@ -1397,7 +1486,10 @@ class DocumentController extends Controller
             'positions' => $validated['positions'],
         ];
 
-        $document->update(['template_snapshot' => $snapshot]);
+        // Invalidate any cached signed PDF so PdfSignatureService::streamPdf() regenerates
+        // it from these positions on next view/download — needed for re-placement on an
+        // already-completed document, where a stale final_pdf_path would otherwise persist.
+        $document->update(['template_snapshot' => $snapshot, 'final_pdf_path' => null]);
 
         AuditService::log(
             $document->id,
