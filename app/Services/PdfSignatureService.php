@@ -35,11 +35,18 @@ class PdfSignatureService
                 // Fall through — the key resolution below falls back to the original —
                 // but log it, otherwise a stamping failure looks identical to "nothing to
                 // stamp yet" from the outside and silently keeps serving the original PDF
-                // on every request.
-                Log::error('PdfSignatureService: final PDF generation failed', [
-                    'document_id' => $document->id,
-                    'exception'   => $e->getMessage(),
-                ]);
+                // on every request. Logging itself must never be able to turn a recoverable
+                // generation failure into a hard 500 (e.g. a misconfigured/unwritable log
+                // file throwing from within Monolog) — swallow that too.
+                try {
+                    Log::error('PdfSignatureService: final PDF generation failed', [
+                        'document_id' => $document->id,
+                        'exception'   => $e->getMessage(),
+                    ]);
+                } catch (\Throwable) {
+                    // Nothing more we can do here — the PDF still falls back to the
+                    // original below either way.
+                }
             }
         }
 
