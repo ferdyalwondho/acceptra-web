@@ -74,7 +74,7 @@ class DocumentExcelExport
                         $row[] = $step?->status;
                         $row[] = $step?->approver?->name ?? $step?->offline_approver_name;
                         $row[] = $step?->action_at?->format('d M Y') ?? $step?->offline_date?->format('d M Y');
-                        $row[] = $step?->punchlist_notes;
+                        $row[] = $step?->status === 'rejected' ? $step?->reject_reason : $step?->punchlist_notes;
                     }
 
                     $sheet->fromArray($row, null, "A{$rowIndex}");

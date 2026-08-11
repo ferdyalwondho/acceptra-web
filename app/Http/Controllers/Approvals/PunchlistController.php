@@ -120,13 +120,13 @@ class PunchlistController extends Controller
         abort_if(! $verification, 404);
 
         if ($user->role === 'partner') {
-            abort_if($document->submitted_by !== $user->id, 403);
+            abort_if(! $document->accessibleByPartner($user), 403);
         } elseif (! in_array($user->role, ['admin', 'super_admin', 'viewer']) && $verification->approver_id !== $user->id) {
             abort(403);
         }
 
         abort_if(! $verification->evidence_path || ! Storage::exists($verification->evidence_path), 404, 'Evidence file not found.');
 
-        return Storage::download($verification->evidence_path, $verification->evidence_original_filename ?? 'evidence');
+        return Storage::response($verification->evidence_path, $verification->evidence_original_filename ?? 'evidence');
     }
 }

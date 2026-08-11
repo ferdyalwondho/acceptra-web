@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Auth\Passwords\CanResetPassword;
 use Illuminate\Contracts\Auth\CanResetPassword as CanResetPasswordContract;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -73,6 +74,20 @@ class User extends Authenticatable implements CanResetPasswordContract
     public function canLogin(): bool
     {
         return $this->status === 'active';
+    }
+
+    // Eligible to be assigned as a PIC/approver: either already active, or still on their
+    // first invitation (never completed activation yet). Excludes users who were active
+    // before and have since been deactivated — their slot should free up for someone else,
+    // not stay claimed by an account nobody expects to log back in.
+    public function scopeAssignable(Builder $query): Builder
+    {
+        return $query->where(function (Builder $q) {
+            $q->where('status', 'active')
+                ->orWhere(function (Builder $q2) {
+                    $q2->where('status', 'inactive')->whereNull('email_verified_at');
+                });
+        });
     }
 
     public function getInitialsAttribute(): string

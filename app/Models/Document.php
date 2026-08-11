@@ -7,12 +7,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
 class Document extends Model
 {
-    use HasFactory, HasUuids, SoftDeletes;
+    use HasFactory, HasUuids;
 
     protected $fillable = [
         'unique_id',
@@ -36,7 +35,6 @@ class Document extends Model
         'date_atp_submission',
         'date_atp_approved',
         'atp_punchlist',
-        'acceptance_status',
         'is_imported',
     ];
 
@@ -92,5 +90,17 @@ class Document extends Model
     public function punchlistVerifications(): HasMany
     {
         return $this->hasMany(PunchlistVerification::class);
+    }
+
+    /**
+     * Whether a Partner-role user may view/act on this document — either because they
+     * personally submitted it, or because it's assigned to their partner org (covers
+     * documents an Admin submits/imports on a partner's behalf, where submitted_by is
+     * the Admin's own id and would never match any PIC at that partner).
+     */
+    public function accessibleByPartner(User $user): bool
+    {
+        return $this->submitted_by === $user->id
+            || ($user->partner_id !== null && $this->partner_id === $user->partner_id);
     }
 }

@@ -258,7 +258,7 @@ class UserController extends Controller
         abort_if(! $request->user(), 401);
 
         $query = User::query()
-            ->where('status', 'active')
+            ->assignable()
             ->whereNull('deleted_at');
 
         if ($role = $request->input('role')) {
