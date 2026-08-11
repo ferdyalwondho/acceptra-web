@@ -57,9 +57,9 @@ class AttachmentController extends Controller
             return;
         }
 
-        // Partner: only their own document
+        // Partner: only documents assigned to their org
         if ($user->role === 'partner') {
-            abort_if($document->submitted_by !== $user->id, 403, 'You are not authorized to access this attachment.');
+            abort_if(! $document->accessibleByPartner($user), 403, 'You are not authorized to access this attachment.');
             return;
         }
 

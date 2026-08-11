@@ -4,7 +4,7 @@ import ApprovalLayout from '@/layouts/ApprovalLayout';
 import StatusBadge from '@/components/acceptra/StatusBadge';
 import ApprovalTimeline, { type ApprovalStep } from '@/components/acceptra/ApprovalTimeline';
 import SignaturePad from '@/components/acceptra/SignaturePad';
-import PdfViewer, { type PlacementPosition } from '@/components/acceptra/PdfViewer';
+import PdfViewer from '@/components/acceptra/PdfViewer';
 import { cn } from '@/lib/utils';
 import type { ExcelAttachment } from '@/types';
 import {
@@ -90,7 +90,6 @@ interface Props {
   user_signature_url?: string | null;
   pdf_url?: string | null;
   previous_pdf_url?: string | null;
-  placements?: Record<string, PlacementPosition> | null;
 }
 
 export default function ApprovalScreen({
@@ -107,7 +106,6 @@ export default function ApprovalScreen({
   user_signature_url,
   pdf_url,
   previous_pdf_url,
-  placements,
 }: Props) {
   const [action,        setAction]        = useState<ActionType | null>(null);
   const [punchlistNote, setPunchlistNote] = useState('');
@@ -572,7 +570,7 @@ export default function ApprovalScreen({
               <div className="flex items-center gap-2 rounded-md bg-[var(--color-bg-subtle)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)]">
                 <FileText className="h-3.5 w-3.5" /> PDF Utama (Sebelum Revisi)
               </div>
-              <PdfViewer url={previous_pdf_url} placements={null} className="flex-1" />
+              <PdfViewer url={previous_pdf_url} className="flex-1" />
             </div>
           )}
           <div className="flex flex-col gap-2">
@@ -580,7 +578,7 @@ export default function ApprovalScreen({
               <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Punchlist
             </div>
             {revisionPdfMeta}
-            <PdfViewer url={punchlist_revision_pdf!.url} placements={null} className="flex-1" />
+            <PdfViewer url={punchlist_revision_pdf!.url} className="flex-1" />
           </div>
         </div>
       ) : (
@@ -591,7 +589,7 @@ export default function ApprovalScreen({
               <div className="flex items-center gap-2 rounded-md bg-danger-surface/60 px-3 py-1.5 text-xs font-semibold text-danger">
                 <XCircle className="h-3.5 w-3.5" /> PDF Sebelumnya (Ditolak)
               </div>
-              <PdfViewer url={previous_pdf_url} placements={null} className="flex-1" />
+              <PdfViewer url={previous_pdf_url} className="flex-1" />
             </div>
           )}
           <div className="flex flex-col gap-2">
@@ -600,7 +598,7 @@ export default function ApprovalScreen({
                 <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Terbaru
               </div>
             )}
-            <PdfViewer url={pdf_url ?? null} placements={placements} className="flex-1" />
+            <PdfViewer url={pdf_url ?? null} className="flex-1" />
           </div>
         </div>
       )}

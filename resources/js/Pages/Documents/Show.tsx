@@ -6,9 +6,11 @@ import axios from 'axios';
 import AppShell from '@/layouts/AppShell';
 import StatusBadge from '@/components/acceptra/StatusBadge';
 import ApprovalTimeline, { type ApprovalStep as TimelineStep } from '@/components/acceptra/ApprovalTimeline';
+import SearchableSelect from '@/components/acceptra/SearchableSelect';
+import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import type { DocumentRecord, ExcelAttachment, PlacementPosition, TemplateLevelOption, TemplateLevelRecord, PageProps, AuditLogEntry } from '@/types';
+import type { DocumentRecord, ExcelAttachment, PlacementPosition, TemplateLevelOption, TemplateLevelRecord, PartnerOption, PageProps, AuditLogEntry } from '@/types';
 import {
   ArrowLeft, Download, Users, RotateCcw, FileText, FileSpreadsheet,
   AlertTriangle, CheckCircle2, X, Trash2,
@@ -20,9 +22,11 @@ interface Props {
   document: DocumentRecord;
   anchor_failed: boolean;
   pdf_url: string | null;
+  original_pdf_url: string | null;
   excel_attachment: ExcelAttachment | null;
   audit_logs: AuditLogEntry[];
   initial_tab: string;
+  partners: PartnerOption[];
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -137,6 +141,10 @@ function buildDefaultPositions(
 interface PlacementPanelProps {
   pdfUrl: string;
   levels: TemplateLevelRecord[];
+  // Current approval_steps — used to exclude levels already offline-approved (e.g. via
+  // Submit Ongoing import) from getting a placement box, since their signature is already
+  // physically visible on the scanned original PDF and never needs an in-system stamp.
+  steps: DocumentRecord['approval_steps'];
   documentId: string;
   onSaved: () => void;
   // 'standalone' (default) posts to /documents/{id}/placement on its own Save button —
@@ -148,10 +156,14 @@ interface PlacementPanelProps {
   // Submit Ongoing (imported) documents already have their real submission date printed on the
   // original PDF — skip seeding a "Tgl Submit" box so it can't be overwritten with today's date.
   isImported?: boolean;
+  // Re-placement on an already-placed document: seed boxes from the currently saved
+  // positions instead of the default layout, so the admin adjusts rather than starts over.
+  initialPositions?: Record<string, Pos> | null;
 }
 
 function PlacementPanel({
-  pdfUrl, levels, documentId, onSaved, mode = 'standalone', onPositionsChange, isImported = false,
+  pdfUrl, levels, steps, documentId, onSaved, mode = 'standalone', onPositionsChange,
+  isImported = false, initialPositions = null,
 }: PlacementPanelProps) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -164,8 +176,13 @@ function PlacementPanel({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // Only L2+ that actually require a signature get placement boxes — L1 is auto-approved,
-  // and approve-only levels (requires_signature=false, e.g. MS BO Team) never get stamped.
-  const placementLevels = levels.filter(l => l.level_order > 1 && l.requires_signature);
+  // approve-only levels (requires_signature=false, e.g. MS BO Team) never get stamped, and
+  // levels already offline-approved already have their signature baked into the scanned PDF.
+  const offlineLevelOrders = new Set(
+    steps.filter(s => s.status === 'offline_approved').map(s => s.level_order),
+  );
+  const placementLevels = levels.filter(l => l.level_order > 1 && l.requires_signature
+    && !offlineLevelOrders.has(l.level_order));
 
   const [positions, setPositions] = useState<Record<string, Pos>>({});
   const defaultsSeeded = useRef(false);
@@ -201,7 +218,9 @@ function PlacementPanel({
 
         if (!defaultsSeeded.current) {
           defaultsSeeded.current = true;
-          setPositions(buildDefaultPositions(placementLevels, vp.height, isImported));
+          setPositions(initialPositions && Object.keys(initialPositions).length > 0
+            ? initialPositions
+            : buildDefaultPositions(placementLevels, vp.height, isImported));
         }
 
         await page.render({ canvas, viewport: vp }).promise;
@@ -406,13 +425,14 @@ function PlacementPanel({
 /* ── Routing Panel (Partner-submitted documents, post-L1-approve) ──────── */
 
 function RoutingPanel({
-  documentId, templateId, clusterZone, pdfUrl, snapLevels, variant = 'routing',
+  documentId, templateId, clusterZone, pdfUrl, snapLevels, steps, variant = 'routing',
 }: {
   documentId: string;
   templateId: string;
   clusterZone: string | null;
   pdfUrl: string;
   snapLevels: TemplateLevelRecord[];
+  steps: DocumentRecord['approval_steps'];
   variant?: 'routing' | 'punchlist';
 }) {
   const { t } = useTranslation();
@@ -513,6 +533,7 @@ function RoutingPanel({
         <PlacementPanel
           pdfUrl={pdfUrl}
           levels={snapLevels}
+          steps={steps}
           documentId={documentId}
           onSaved={() => {}}
           mode="controlled"
@@ -569,6 +590,210 @@ function RoutingPanel({
             {submitting ? t('documents.show.routing_panel_saving_btn') : t('documents.show.routing_panel_submit_btn')}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Re-placement Modal (completed documents) ───────────────────────────── */
+
+function ReplacementModal({
+  documentId, pdfUrl, levels, steps, initialPositions, isImported, onClose,
+}: {
+  documentId: string;
+  pdfUrl: string;
+  levels: TemplateLevelRecord[];
+  steps: DocumentRecord['approval_steps'];
+  initialPositions: Record<string, Pos> | null;
+  isImported: boolean;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onClose} />
+      <div className="relative z-[410] max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="font-semibold text-[var(--color-text-primary)]">{t('documents.show.replacement_title')}</h2>
+          <button onClick={onClose} className="rounded-md p-1 transition-colors hover:bg-[var(--color-bg-subtle)]">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <PlacementPanel
+          pdfUrl={pdfUrl}
+          levels={levels}
+          steps={steps}
+          documentId={documentId}
+          isImported={isImported}
+          initialPositions={initialPositions}
+          onSaved={() => {
+            router.reload({ only: ['document', 'original_pdf_url', 'audit_logs'] });
+            onClose();
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ── Edit Metadata Modal (Partner/Subcon, PT Index, Project Code, Link ID/Name) ─── */
+
+function EditMetadataModal({
+  documentId, doc, partners, onClose,
+}: {
+  documentId: string;
+  doc: DocumentRecord;
+  partners: PartnerOption[];
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [step,        setStep]        = useState<'form' | 'confirm'>('form');
+  const [partnerId,   setPartnerId]   = useState(doc.partner?.id ?? '');
+  const [ptIndex,     setPtIndex]     = useState(doc.pt_index);
+  const [projectCode, setProjectCode] = useState(doc.project_code ?? '');
+  const [linkId,      setLinkId]      = useState(doc.link_id ?? '');
+  const [linkName,    setLinkName]    = useState(doc.link_name ?? '');
+  const [submitting,  setSubmitting]  = useState(false);
+  const [errors,      setErrors]      = useState<Record<string, string>>({});
+
+  const ptIndexDup = useDuplicateCheck('pt_index', ptIndex, documentId);
+
+  const changes = [
+    { label: t('documents.show.edit_metadata_partner'), old: doc.partner?.name ?? '—', new: partners.find((p) => p.id === partnerId)?.name ?? '—', changed: partnerId !== (doc.partner?.id ?? '') },
+    { label: t('documents.show.edit_metadata_pt_index'), old: doc.pt_index, new: ptIndex, changed: ptIndex !== doc.pt_index },
+    { label: t('documents.show.edit_metadata_project_code'), old: doc.project_code ?? '—', new: projectCode, changed: projectCode !== (doc.project_code ?? '') },
+    { label: t('documents.show.edit_metadata_link_id'), old: doc.link_id ?? '—', new: linkId, changed: linkId !== (doc.link_id ?? '') },
+    { label: t('documents.show.edit_metadata_link_name'), old: doc.link_name ?? '—', new: linkName, changed: linkName !== (doc.link_name ?? '') },
+  ].filter((c) => c.changed);
+
+  const canContinue = !!partnerId && !!ptIndex.trim() && !!projectCode.trim() && !!linkId.trim() && !!linkName.trim();
+
+  function handleSave() {
+    if (submitting) return;
+    setSubmitting(true);
+    setErrors({});
+    router.put(`/documents/${documentId}`, {
+      partner_id:   partnerId,
+      pt_index:     ptIndex,
+      project_code: projectCode,
+      link_id:      linkId,
+      link_name:    linkName,
+    }, {
+      onSuccess: onClose,
+      onError: (e) => { setErrors(e as Record<string, string>); setStep('form'); },
+      onFinish: () => setSubmitting(false),
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onClose} />
+      <div className="relative z-[410] w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+        {step === 'form' ? (
+          <>
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="font-semibold text-[var(--color-text-primary)]">{t('documents.show.edit_metadata_title')}</h2>
+              <button onClick={onClose} className="rounded-md p-1 transition-colors hover:bg-[var(--color-bg-subtle)]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                  {t('documents.show.edit_metadata_partner')} <span className="text-danger">*</span>
+                </label>
+                <SearchableSelect
+                  options={partners.map((p) => ({ value: p.id, label: p.name }))}
+                  value={partnerId}
+                  onChange={setPartnerId}
+                  hasError={!!errors.partner_id}
+                />
+                {errors.partner_id && <p className="mt-1 text-xs text-danger">{errors.partner_id}</p>}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                  {t('documents.show.edit_metadata_pt_index')} <span className="text-danger">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={ptIndex}
+                  onChange={(e) => setPtIndex(e.target.value.toUpperCase())}
+                  className={cn(inputCls, ptIndexDup.duplicate && 'border-danger')}
+                />
+                {ptIndexDup.duplicate && (
+                  <p className="mt-1 text-xs text-danger">{t('documents.show.edit_metadata_pt_index_duplicate')}</p>
+                )}
+                {errors.pt_index && <p className="mt-1 text-xs text-danger">{errors.pt_index}</p>}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                  {t('documents.show.edit_metadata_project_code')} <span className="text-danger">*</span>
+                </label>
+                <input type="text" value={projectCode} onChange={(e) => setProjectCode(e.target.value.toUpperCase())} className={inputCls} />
+                {errors.project_code && <p className="mt-1 text-xs text-danger">{errors.project_code}</p>}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                  {t('documents.show.edit_metadata_link_id')} <span className="text-danger">*</span>
+                </label>
+                <input type="text" value={linkId} onChange={(e) => setLinkId(e.target.value.toUpperCase())} className={inputCls} />
+                {errors.link_id && <p className="mt-1 text-xs text-danger">{errors.link_id}</p>}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                  {t('documents.show.edit_metadata_link_name')} <span className="text-danger">*</span>
+                </label>
+                <input type="text" value={linkName} onChange={(e) => setLinkName(e.target.value.toUpperCase())} className={inputCls} />
+                {errors.link_name && <p className="mt-1 text-xs text-danger">{errors.link_name}</p>}
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={onClose} className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]">
+                {t('documents.show.reassign_btn_batal')}
+              </button>
+              <button
+                onClick={() => setStep('confirm')}
+                disabled={!canContinue || ptIndexDup.duplicate}
+                className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+              >
+                {t('documents.show.edit_metadata_btn_continue')}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="font-semibold text-[var(--color-text-primary)]">{t('documents.show.edit_metadata_confirm_title')}</h2>
+              <button onClick={onClose} className="rounded-md p-1 transition-colors hover:bg-[var(--color-bg-subtle)]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mb-3 text-sm text-[var(--color-text-secondary)]">{t('documents.show.edit_metadata_confirm_body')}</p>
+            <div className="space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+              {changes.length === 0 ? (
+                <p className="text-sm text-[var(--color-text-tertiary)]">{t('documents.show.edit_metadata_no_changes')}</p>
+              ) : changes.map((c) => (
+                <div key={c.label} className="text-sm">
+                  <span className="font-medium text-[var(--color-text-primary)]">{c.label}:</span>{' '}
+                  <span className="text-[var(--color-text-tertiary)] line-through">{c.old}</span>{' '}
+                  <span className="text-[var(--color-text-primary)]">→ {c.new}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setStep('form')} className="h-9 rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-[var(--color-bg-subtle)]">
+                {t('documents.show.edit_metadata_btn_back')}
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={submitting || changes.length === 0}
+                className="h-9 rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
+              >
+                {submitting ? t('documents.show.submitting') : t('documents.show.edit_metadata_btn_confirm')}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -923,7 +1148,7 @@ function AuditTrailTab({ logs, documentId }: { logs: AuditLogEntry[]; documentId
 
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
-export default function DocumentShow({ document: doc, anchor_failed, pdf_url, excel_attachment, audit_logs, initial_tab }: Props) {
+export default function DocumentShow({ document: doc, anchor_failed, pdf_url, original_pdf_url, excel_attachment, audit_logs, initial_tab, partners }: Props) {
   const { auth, flash } = usePage<PageProps>().props;
   const { t } = useTranslation();
   const isPartner    = auth.user?.role === 'partner';
@@ -932,6 +1157,8 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
 
   const [activeTab,          setActiveTab]          = useState(initial_tab ?? 'overview');
   const [showReassign,       setShowReassign]       = useState(false);
+  const [showReplacement,    setShowReplacement]    = useState(false);
+  const [showEditMetadata,   setShowEditMetadata]   = useState(false);
   const [placementSaved,     setPlacementSaved]     = useState(false);
   const [deletingAtt,        setDeletingAtt]        = useState(false);
   const [showDeleteConfirm,  setShowDeleteConfirm]  = useState(false);
@@ -994,6 +1221,8 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
   const canEditPunchlist = statusCode === '14' && (isAdmin || isOwningPartner);
   const canEdit      = canEditPunchlist || ['02', '05', '08', '11', 'draft'].includes(statusCode);
   const canReassign  = isAdmin && !['draft', '13', '14', '15', '16', '17'].includes(statusCode);
+  const canReplacement = isAdmin && isDone;
+  const canEditMetadata = isAdmin && !isDraft && !isDone;
   const hasActiveL1Step = doc.approval_steps.some((s) => s.level_order === 1 && s.is_active);
   // Placement is Admin-only — a Partner viewing their own document must never see or use it.
   // Also excluded during any punchlist stage/L1-gate window, so the standalone panel can't
@@ -1099,6 +1328,22 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                     <Users className="h-4 w-4" /> {t('documents.show.btn_reassign')}
                   </button>
                 )}
+                {canReplacement && (
+                  <button
+                    onClick={() => setShowReplacement(true)}
+                    className="flex h-9 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
+                  >
+                    <MapPin className="h-4 w-4" /> {t('documents.show.btn_replacement')}
+                  </button>
+                )}
+                {canEditMetadata && (
+                  <button
+                    onClick={() => setShowEditMetadata(true)}
+                    className="flex h-9 items-center gap-1.5 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)]"
+                  >
+                    <Info className="h-4 w-4" /> {t('documents.show.btn_edit_metadata')}
+                  </button>
+                )}
                 {canEdit && (
                   <Link
                     href={`/documents/${doc.id}/edit`}
@@ -1144,6 +1389,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                   clusterZone={doc.cluster_zone}
                   pdfUrl={pdf_url}
                   snapLevels={snapLevels}
+                  steps={doc.approval_steps}
                   variant={statusCode === '14' ? 'punchlist' : 'routing'}
                 />
               )}
@@ -1153,6 +1399,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
                 <PlacementPanel
                   pdfUrl={pdf_url!}
                   levels={snapLevels}
+                  steps={doc.approval_steps}
                   documentId={doc.id}
                   isImported={doc.is_imported}
                   onSaved={() => {
@@ -1452,6 +1699,34 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, ex
           documentId={doc.id}
           steps={doc.approval_steps}
           onClose={() => setShowReassign(false)}
+        />
+      )}
+      {showReplacement && original_pdf_url && (
+        <ReplacementModal
+          documentId={doc.id}
+          pdfUrl={original_pdf_url}
+          levels={snapLevels}
+          steps={doc.approval_steps}
+          initialPositions={
+            snapshot?.placement?.positions
+              ? Object.fromEntries(
+                  Object.entries(snapshot.placement.positions).map(([key, pos]) => [
+                    key,
+                    { x: pos.x, y: pos.y, width: pos.width, height: pos.height },
+                  ]),
+                )
+              : null
+          }
+          isImported={doc.is_imported}
+          onClose={() => setShowReplacement(false)}
+        />
+      )}
+      {showEditMetadata && (
+        <EditMetadataModal
+          documentId={doc.id}
+          doc={doc}
+          partners={partners}
+          onClose={() => setShowEditMetadata(false)}
         />
       )}
       {showSubmitConfirm && (
