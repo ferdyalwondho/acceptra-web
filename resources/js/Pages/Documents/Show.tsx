@@ -352,12 +352,19 @@ function PlacementPanel({
             {t('documents.show.placement_loading')}
           </div>
         )}
+        {/* overflow-x-auto, not a width cap on the canvas — drag positions are stored in
+            the canvas's own intrinsic pixel space (at SAVE_SCALE) and divided by that same
+            scale server-side. If CSS ever shrinks the canvas below its intrinsic width (e.g.
+            a landscape page inside a narrow modal), that display-space/intrinsic-space gap
+            silently throws off every dragged box's saved position, even though it still
+            looks correctly aligned on screen at the time. Scrolling keeps the two identical. */}
+        <div className="overflow-x-auto">
         <div
           ref={wrapRef}
           className="relative inline-block border border-[var(--color-border)]"
           style={{ height: canvasH || undefined }}
         >
-          <canvas ref={canvasRef} className={cn('block max-w-full', !ready && 'invisible')} />
+          <canvas ref={canvasRef} className={cn('block', !ready && 'invisible')} />
 
           {ready && Object.entries(positions).map(([key, pos]) => {
             const [lo, type] = key.split('_');
@@ -408,6 +415,7 @@ function PlacementPanel({
               </div>
             );
           })}
+        </div>
         </div>
 
         {mode === 'standalone' && saveError && (
@@ -627,7 +635,7 @@ function ReplacementModal({
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[rgba(17,24,39,.45)]" onClick={onClose} />
-      <div className="relative z-[410] max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg">
+      <div className="relative z-[410] max-h-[90vh] w-full max-w-[95vw] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6 shadow-lg lg:max-w-5xl">
         <div className="mb-5 flex items-center justify-between">
           <h2 className="font-semibold text-[var(--color-text-primary)]">{t('documents.show.replacement_title')}</h2>
           <button onClick={onClose} className="rounded-md p-1 transition-colors hover:bg-[var(--color-bg-subtle)]">
