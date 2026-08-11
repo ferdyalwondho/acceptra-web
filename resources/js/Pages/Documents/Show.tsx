@@ -218,8 +218,23 @@ function PlacementPanel({
 
         if (!defaultsSeeded.current) {
           defaultsSeeded.current = true;
-          setPositions(initialPositions && Object.keys(initialPositions).length > 0
-            ? initialPositions
+
+          // Drop any carried-over position key for a level that's no longer offered
+          // (e.g. a level that's since become offline-approved) — otherwise a stray
+          // "{level}_sig"/"{level}_name" key from a prior save keeps resurfacing as a
+          // draggable box even though placementLevels no longer includes that level.
+          const allowedLevelOrders = new Set(placementLevels.map(l => l.level_order));
+          const filteredInitial = initialPositions
+            ? Object.fromEntries(
+                Object.entries(initialPositions).filter(([key]) => {
+                  const [lo] = key.split('_');
+                  return lo === 'doc' || allowedLevelOrders.has(Number(lo));
+                }),
+              )
+            : null;
+
+          setPositions(filteredInitial && Object.keys(filteredInitial).length > 0
+            ? filteredInitial
             : buildDefaultPositions(placementLevels, vp.height, isImported));
         }
 
@@ -1148,7 +1163,7 @@ function AuditTrailTab({ logs, documentId }: { logs: AuditLogEntry[]; documentId
 
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
-export default function DocumentShow({ document: doc, anchor_failed, pdf_url, original_pdf_url, excel_attachment, audit_logs, initial_tab, partners }: Props) {
+export default function DocumentShow({ document: doc, anchor_failed, original_pdf_url, excel_attachment, audit_logs, initial_tab, partners }: Props) {
   const { auth, flash } = usePage<PageProps>().props;
   const { t } = useTranslation();
   const isPartner    = auth.user?.role === 'partner';
@@ -1227,7 +1242,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, or
   // Placement is Admin-only — a Partner viewing their own document must never see or use it.
   // Also excluded during any punchlist stage/L1-gate window, so the standalone panel can't
   // be used to bypass the intended upload → (L1 gate) → placement sequencing.
-  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending && !placementSaved && !!pdf_url
+  const showPlacement = isAdmin && anchor_failed && !doc.routing_pending && !placementSaved && !!original_pdf_url
     && !hasActiveL1Step
     && !['14', '15', '16', '17'].includes(statusCode);
 
@@ -1382,12 +1397,12 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, or
 
               {/* Routing (L2-L4 PIC + placement + optional excel) — Partner-submitted
                   documents only, once L1 has approved and left them unrouted */}
-              {isAdmin && doc.routing_pending && pdf_url && (
+              {isAdmin && doc.routing_pending && original_pdf_url && (
                 <RoutingPanel
                   documentId={doc.id}
                   templateId={snapshot?.template_id ?? ''}
                   clusterZone={doc.cluster_zone}
-                  pdfUrl={pdf_url}
+                  pdfUrl={original_pdf_url}
                   snapLevels={snapLevels}
                   steps={doc.approval_steps}
                   variant={statusCode === '14' ? 'punchlist' : 'routing'}
@@ -1397,7 +1412,7 @@ export default function DocumentShow({ document: doc, anchor_failed, pdf_url, or
               {/* Manual placement UI */}
               {showPlacement && (
                 <PlacementPanel
-                  pdfUrl={pdf_url!}
+                  pdfUrl={original_pdf_url!}
                   levels={snapLevels}
                   steps={doc.approval_steps}
                   documentId={doc.id}

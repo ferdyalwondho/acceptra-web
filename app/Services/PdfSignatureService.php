@@ -43,6 +43,39 @@ class PdfSignatureService
     }
 
     /**
+     * Serve original_pdf_path through the exact same source-resolution generateAndUpload()
+     * uses before stamping (resolveFpdiSource) — the placement editor's preview must match
+     * that byte-for-byte, or an admin can drag a box to a position that looks correct in
+     * preview but lands in the wrong place (or a Ghostscript-normalized copy the final
+     * stamp never actually uses) once the final PDF is generated.
+     */
+    public function streamNormalizedOriginal(Document $document): \Illuminate\Http\Response
+    {
+        if (! $document->original_pdf_path || ! Storage::exists($document->original_pdf_path)) {
+            abort(404, 'PDF not found.');
+        }
+
+        $tempInput    = tempnam(sys_get_temp_dir(), 'acc_orig_');
+        $tempParsable = null;
+
+        try {
+            file_put_contents($tempInput, Storage::get($document->original_pdf_path));
+            $tempParsable = $this->resolveFpdiSource($tempInput);
+            $bytes        = file_get_contents($tempParsable);
+        } finally {
+            @unlink($tempInput);
+            if ($tempParsable) {
+                @unlink($tempParsable);
+            }
+        }
+
+        return response($bytes, 200, [
+            'Content-Type'        => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="original.pdf"',
+        ]);
+    }
+
+    /**
      * AVIAT_ATP_[SOW_NAME]_[LINK_ID]_[PROJECT_CODE]_[PT_INDEX].pdf — sanitized so every
      * segment is filesystem-safe; missing nullable fields fall back to "NA".
      */
@@ -95,6 +128,24 @@ class PdfSignatureService
     }
 
     /**
+     * Resolves to whichever local temp file FPDI will actually parse — the raw input if
+     * the free FPDI parser can read it directly, or a Ghostscript-normalized copy
+     * otherwise. Ghostscript's pdfwrite re-write can shift page geometry or corrupt
+     * embedded images (e.g. a scanned offline-approval signature), so it's only used as
+     * a fallback for PDFs FPDI genuinely can't parse as-is — never unconditionally.
+     */
+    private function resolveFpdiSource(string $rawInputPath): string
+    {
+        try {
+            (new Fpdi('P', 'pt'))->setSourceFile($rawInputPath);
+
+            return $rawInputPath;
+        } catch (\Throwable) {
+            return $this->decompressPdf($rawInputPath);
+        }
+    }
+
+    /**
      * Download original_pdf_path from the default disk, embed signatures/stamps,
      * and upload the result back to the default disk as documents/final/{id}.pdf.
      * No-op if no placement positions are configured or no signatures exist yet.
@@ -129,7 +180,7 @@ class PdfSignatureService
         try {
             file_put_contents($tempInput, Storage::get($document->original_pdf_path));
 
-            $tempParsable = $this->decompressPdf($tempInput);
+            $tempParsable = $this->resolveFpdiSource($tempInput);
 
             $pdf       = new Fpdi('P', 'pt');
             $pdf->SetFillColor(255, 255, 255);
