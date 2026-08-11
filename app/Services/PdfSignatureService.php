@@ -373,7 +373,7 @@ class PdfSignatureService
         $outputPath = tempnam(sys_get_temp_dir(), 'acc_final_');
 
         $cmd = sprintf(
-            'qpdf %s --overlay %s --to=1 -- %s 2>/dev/null',
+            'qpdf %s --overlay %s --to=1 -- %s 2>&1',
             escapeshellarg($basePath),
             escapeshellarg($overlayPath),
             escapeshellarg($outputPath)
@@ -381,8 +381,16 @@ class PdfSignatureService
 
         exec($cmd, $out, $exit);
 
-        if ($exit !== 0 || ! file_exists($outputPath) || filesize($outputPath) === 0) {
-            throw new \RuntimeException('qpdf overlay merge failed.');
+        // qpdf's exit codes: 0 = clean success, 3 = succeeded but emitted warnings about
+        // the input (e.g. a minor structural quirk it worked around) — the output file is
+        // still complete and valid. Only treat other non-zero codes (e.g. 2 = an actual
+        // processing error) as failure.
+        if (! in_array($exit, [0, 3], true) || ! file_exists($outputPath) || filesize($outputPath) === 0) {
+            throw new \RuntimeException(sprintf(
+                'qpdf overlay merge failed (exit %d): %s',
+                $exit,
+                implode(' | ', $out)
+            ));
         }
 
         return $outputPath;
