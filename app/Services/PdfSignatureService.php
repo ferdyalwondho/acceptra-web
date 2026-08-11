@@ -136,20 +136,20 @@ class PdfSignatureService
     }
 
     /**
-     * Resolves to whichever local temp file FPDI should import from — a Ghostscript-
-     * normalized copy of the original, or the raw file itself only if Ghostscript can't
-     * process it at all. Ghostscript's simplified pdfwrite output is what the free FPDI
-     * parser is reliably tested against; the raw original can carry embedded resources
-     * (e.g. a scanned offline-approval signature's image encoding) that FPDI's
-     * importPage()/useTemplate() silently drops without throwing — no exception, no log,
-     * the stamped page just quietly comes out missing that image. Coordinate accuracy is
-     * NOT a reason to prefer the raw file — that was traced to the placement editor's
-     * canvas being CSS-rescaled, independent of which source this resolves to.
+     * Resolves to whichever local temp file FPDI can actually read page geometry from —
+     * a Ghostscript-normalized copy of the original, or the raw file itself only if
+     * Ghostscript can't process it at all. This is only ever used to read a page's
+     * dimensions (readPageOneSize()) or preview it in the browser (streamNormalizedOriginal()) —
+     * generateAndUpload() no longer has FPDI import/re-export the original's own page
+     * content (that used to be able to silently drop embedded resources, e.g. a scanned
+     * offline-approval signature's image encoding, with no exception thrown; see
+     * buildOverlay()/mergeOverlay() for how stamping avoids that now). Coordinate accuracy
+     * is NOT a reason to prefer the raw file either — that was traced to the placement
+     * editor's canvas being CSS-rescaled, independent of which source this resolves to.
      *
-     * Walks every page the same way stampOnto() does (import + template size + place),
-     * not just setSourceFile() — some PDFs parse their xref table fine but fail later on
-     * a specific page's content stream, and testing setSourceFile() alone would wrongly
-     * call those "parsable", diverging from what stampOnto() actually does.
+     * Walks every page (import + template size + place), not just setSourceFile() — some
+     * PDFs parse their xref table fine but fail later on a specific page's content stream,
+     * and testing setSourceFile() alone would wrongly call those "parsable".
      */
     private function resolveFpdiSource(string $rawInputPath): string
     {
@@ -176,6 +176,15 @@ class PdfSignatureService
      * Download original_pdf_path from the default disk, embed signatures/stamps,
      * and upload the result back to the default disk as documents/final/{id}.pdf.
      * No-op if no placement positions are configured or no signatures exist yet.
+     *
+     * Stamps are built as a *separate* overlay PDF (buildOverlay(), plain FPDF — no
+     * import involved) and merged onto the untouched original via qpdf (mergeOverlay()),
+     * rather than having FPDI import the original page as a template and draw on top of
+     * it. FPDI's free parser can silently drop embedded resources (e.g. a scanned
+     * offline-approval signature's particular image encoding) when re-exporting an
+     * imported page — with no exception, so the previous approach could quietly lose
+     * that content on any given document. qpdf never re-parses/re-encodes the original's
+     * own page content, so it can't lose anything from it — it only adds the overlay on top.
      */
     private function generateAndUpload(Document $document): void
     {
@@ -200,23 +209,24 @@ class PdfSignatureService
         // orphan that never gets cleaned up.
         $tempInput    = tempnam(sys_get_temp_dir(), 'acc_orig_');
         $tempParsable = null;
+        $tempOverlay  = null;
         $tempOutput   = null;
 
         try {
             file_put_contents($tempInput, Storage::get($document->original_pdf_path));
 
-            try {
-                // Prefer a Ghostscript-normalized copy — see resolveFpdiSource() for why:
-                // the free FPDI parser can silently drop embedded resources (e.g. a scanned
-                // offline-approval signature's image) from the raw original without ever
-                // throwing, so "it didn't error" isn't proof the raw file is safe to stamp
-                // from. Only fall back to the raw file if Ghostscript itself can't process it.
-                $tempParsable = $this->decompressPdf($tempInput);
-                $tempOutput   = $this->stampOnto($tempParsable, $document, $positions);
-            } catch (\Throwable) {
-                $tempParsable = null;
-                $tempOutput   = $this->stampOnto($tempInput, $document, $positions);
-            }
+            // Only used to read page 1's dimensions for sizing the overlay — never to
+            // re-export its content, so resolveFpdiSource()'s Ghostscript-vs-raw choice
+            // has no bearing on image fidelity here (that risk was only in the old
+            // import+useTemplate approach, which this no longer does).
+            $tempParsable         = $this->resolveFpdiSource($tempInput);
+            [$pageWidth, $pageHeight] = $this->readPageOneSize($tempParsable);
+
+            $tempOverlay = $this->buildOverlay($document, $positions, $pageWidth, $pageHeight);
+            // Merge onto the untouched raw original, not the Ghostscript-normalized copy —
+            // qpdf reads/writes standard and non-standard PDFs natively, and skipping an
+            // unnecessary Ghostscript pass here avoids re-encoding the original at all.
+            $tempOutput = $this->mergeOverlay($tempInput, $tempOverlay);
 
             $relPath = "documents/final/{$document->id}.pdf";
             Storage::put($relPath, file_get_contents($tempOutput));
@@ -227,6 +237,9 @@ class PdfSignatureService
             if ($tempParsable) {
                 @unlink($tempParsable);
             }
+            if ($tempOverlay) {
+                @unlink($tempOverlay);
+            }
             if ($tempOutput) {
                 @unlink($tempOutput);
             }
@@ -234,104 +247,138 @@ class PdfSignatureService
     }
 
     /**
-     * Runs the full FPDI import + stamp pass against $sourcePath and returns the local
-     * temp path of the resulting PDF. Throws on any FPDI failure — callers decide whether
-     * to retry against a different source.
+     * Reads page 1's width/height (in points) from an already-FPDI-parsable source.
+     * A lightweight structural read (MediaBox only) — not the "import all resources"
+     * step that's unreliable for images, so it's safe even on documents buildOverlay()
+     * will later need qpdf (not FPDI) to actually merge onto.
      */
-    private function stampOnto(string $sourcePath, Document $document, array $positions): string
+    private function readPageOneSize(string $sourcePath): array
+    {
+        $pdf   = new Fpdi('P', 'pt');
+        $pdf->setSourceFile($sourcePath);
+        $tplId = $pdf->importPage(1);
+        $size  = $pdf->getTemplateSize($tplId);
+
+        return [(float) $size['width'], (float) $size['height']];
+    }
+
+    /**
+     * Builds a standalone overlay PDF (page 1 only, sized to match the original) holding
+     * just the stamp content — no original page content is imported into it at all, so
+     * there's nothing for FPDI to lose. Returns the local temp path; caller unlinks it.
+     */
+    private function buildOverlay(Document $document, array $positions, float $pageWidth, float $pageHeight): string
     {
         $tempSigFiles = [];
 
         try {
-            $pdf       = new Fpdi('P', 'pt');
+            $pdf = new Fpdi('P', 'pt', [$pageWidth, $pageHeight]);
+            $pdf->AddPage('P', [$pageWidth, $pageHeight]);
             $pdf->SetFillColor(255, 255, 255);
-            $pageCount = $pdf->setSourceFile($sourcePath);
 
-            for ($p = 1; $p <= $pageCount; $p++) {
-                $tplId = $pdf->importPage($p);
-                $size  = $pdf->getTemplateSize($tplId);
+            foreach ($positions as $key => $pos) {
+                if ((int) ($pos['page'] ?? 1) !== 1) {
+                    continue; // only page 1 is ever placed onto today
+                }
 
-                $pdf->AddPage('P', [$size['width'], $size['height']]);
-                $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height']);
+                // Convert from viewer-px-at-SAVE_SCALE to PDF points (same top-left origin)
+                $x = $pos['x']      / self::SAVE_SCALE;
+                $y = $pos['y']      / self::SAVE_SCALE;
+                $w = $pos['width']  / self::SAVE_SCALE;
+                $h = $pos['height'] / self::SAVE_SCALE;
 
-                foreach ($positions as $key => $pos) {
-                    if ((int) ($pos['page'] ?? 1) !== $p) {
+                // Key format: "{level_order}_sig" / "{level_order}_name", or
+                // "doc_{type}" for document-level fields (not tied to a level).
+                [$levelStr, $type] = explode('_', $key, 2);
+
+                if ($levelStr === 'doc') {
+                    $this->stampDocumentField($pdf, $document, $type, $x, $y, $w, $h);
+                    continue;
+                }
+
+                $level = (int) $levelStr;
+                $step  = $document->approvalSteps->firstWhere('level_order', $level);
+
+                if (! $step) {
+                    continue;
+                }
+
+                if ($type === 'sig' && $step->signature_id) {
+                    $sig = $step->signature ?? Signature::find($step->signature_id);
+                    if (! $sig || ! Storage::exists($sig->image_path)) {
                         continue;
                     }
 
-                    // Convert from viewer-px-at-SAVE_SCALE to PDF points (same top-left origin)
-                    $x = $pos['x']      / self::SAVE_SCALE;
-                    $y = $pos['y']      / self::SAVE_SCALE;
-                    $w = $pos['width']  / self::SAVE_SCALE;
-                    $h = $pos['height'] / self::SAVE_SCALE;
+                    $ext     = strtolower(pathinfo($sig->image_path, PATHINFO_EXTENSION));
+                    $sigTemp = tempnam(sys_get_temp_dir(), 'acc_sig_');
+                    file_put_contents($sigTemp, Storage::get($sig->image_path));
+                    $tempSigFiles[] = $sigTemp;
 
-                    // Key format: "{level_order}_sig" / "{level_order}_name", or
-                    // "doc_{type}" for document-level fields (not tied to a level).
-                    [$levelStr, $type] = explode('_', $key, 2);
+                    $imgType = match ($ext) {
+                        'jpg', 'jpeg' => 'JPEG',
+                        'gif'         => 'GIF',
+                        default       => 'PNG',
+                    };
 
-                    if ($levelStr === 'doc') {
-                        $this->stampDocumentField($pdf, $document, $type, $x, $y, $w, $h);
-                        continue;
-                    }
+                    $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
 
-                    $level = (int) $levelStr;
-                    $step  = $document->approvalSteps->firstWhere('level_order', $level);
+                } elseif ($type === 'name' && $step->approver) {
+                    $nameRowH = $h / 2;
+                    $dateRowH = $h - $nameRowH;
+                    $dateText = $step->action_at?->format('d M Y') ?? $step->offline_date?->format('d M Y');
+                    // FPDF's core fonts only render single-byte cp1252 — raw UTF-8 (e.g.
+                    // accented characters in a name) renders as mojibake without this.
+                    $name = $this->toPdfEncoding($step->approver->name);
 
-                    if (! $step) {
-                        continue;
-                    }
+                    $pdf->SetTextColor(0, 0, 0);
 
-                    if ($type === 'sig' && $step->signature_id) {
-                        $sig = $step->signature ?? Signature::find($step->signature_id);
-                        if (! $sig || ! Storage::exists($sig->image_path)) {
-                            continue;
-                        }
+                    $nameFontSize = $this->fitFontSize($pdf, $name, $w, $nameRowH, 'B');
+                    $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
+                    $pdf->Cell($w, $nameFontSize, $name, 0, 0, 'L', true);
 
-                        $ext     = strtolower(pathinfo($sig->image_path, PATHINFO_EXTENSION));
-                        $sigTemp = tempnam(sys_get_temp_dir(), 'acc_sig_');
-                        file_put_contents($sigTemp, Storage::get($sig->image_path));
-                        $tempSigFiles[] = $sigTemp;
-
-                        $imgType = match ($ext) {
-                            'jpg', 'jpeg' => 'JPEG',
-                            'gif'         => 'GIF',
-                            default       => 'PNG',
-                        };
-
-                        $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
-
-                    } elseif ($type === 'name' && $step->approver) {
-                        $nameRowH = $h / 2;
-                        $dateRowH = $h - $nameRowH;
-                        $dateText = $step->action_at?->format('d M Y') ?? $step->offline_date?->format('d M Y');
-                        // FPDF's core fonts only render single-byte cp1252 — raw UTF-8 (e.g.
-                        // accented characters in a name) renders as mojibake without this.
-                        $name = $this->toPdfEncoding($step->approver->name);
-
-                        $pdf->SetTextColor(0, 0, 0);
-
-                        $nameFontSize = $this->fitFontSize($pdf, $name, $w, $nameRowH, 'B');
-                        $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
-                        $pdf->Cell($w, $nameFontSize, $name, 0, 0, 'L', true);
-
-                        if ($dateText) {
-                            $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
-                            $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
-                            $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', true);
-                        }
+                    if ($dateText) {
+                        $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
+                        $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
+                        $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', true);
                     }
                 }
             }
 
-            $tempOutput = tempnam(sys_get_temp_dir(), 'acc_final_');
-            $pdf->Output($tempOutput, 'F');
+            $tempOverlay = tempnam(sys_get_temp_dir(), 'acc_overlay_');
+            $pdf->Output($tempOverlay, 'F');
 
-            return $tempOutput;
+            return $tempOverlay;
         } finally {
             foreach ($tempSigFiles as $f) {
                 @unlink($f);
             }
         }
+    }
+
+    /**
+     * Stacks $overlayPath's page 1 on top of $basePath's page 1 via qpdf, leaving every
+     * other page — and every byte of page 1 that isn't covered by the overlay — untouched.
+     * Unlike FPDI's importPage()/useTemplate(), qpdf never re-parses the base file's page
+     * content or embedded images, so it can't silently drop any of it.
+     */
+    private function mergeOverlay(string $basePath, string $overlayPath): string
+    {
+        $outputPath = tempnam(sys_get_temp_dir(), 'acc_final_');
+
+        $cmd = sprintf(
+            'qpdf %s --overlay %s --to=1 -- %s 2>/dev/null',
+            escapeshellarg($basePath),
+            escapeshellarg($overlayPath),
+            escapeshellarg($outputPath)
+        );
+
+        exec($cmd, $out, $exit);
+
+        if ($exit !== 0 || ! file_exists($outputPath) || filesize($outputPath) === 0) {
+            throw new \RuntimeException('qpdf overlay merge failed.');
+        }
+
+        return $outputPath;
     }
 
     private function stampDocumentField(
