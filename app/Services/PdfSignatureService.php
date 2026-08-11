@@ -327,6 +327,10 @@ class PdfSignatureService
                         default       => 'PNG',
                     };
 
+                    // Cover the full placement box first — a transparent-background
+                    // signature PNG wouldn't otherwise mask whatever sits underneath it
+                    // (e.g. a template's own pre-printed "PIC Name" line at this spot).
+                    $pdf->Rect($x, $y, $w, $h, 'F');
                     $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
 
                 } elseif ($type === 'name' && $step->approver) {
@@ -339,14 +343,20 @@ class PdfSignatureService
 
                     $pdf->SetTextColor(0, 0, 0);
 
+                    // Cover the whole box up front — Cell()'s own fill only paints a band
+                    // as tall as the text itself, which doesn't fully mask pre-existing
+                    // content (e.g. a name the template already had printed at this exact
+                    // spot) that's taller or offset from the new text's tight bounding box.
+                    $pdf->Rect($x, $y, $w, $h, 'F');
+
                     $nameFontSize = $this->fitFontSize($pdf, $name, $w, $nameRowH, 'B');
                     $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
-                    $pdf->Cell($w, $nameFontSize, $name, 0, 0, 'L', true);
+                    $pdf->Cell($w, $nameFontSize, $name, 0, 0, 'L', false);
 
                     if ($dateText) {
                         $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
                         $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
-                        $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', true);
+                        $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', false);
                     }
                 }
             }
@@ -436,8 +446,11 @@ class PdfSignatureService
         }
 
         $pdf->SetTextColor(0, 0, 0);
+        // Cover the whole box first — see the "name" stamp in buildOverlay() for why
+        // Cell()'s own fill (only as tall as the text) isn't enough on its own.
+        $pdf->Rect($x, $y, $w, $h, 'F');
         $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
-        $pdf->Cell($w, $fontSize, $text, 0, 0, 'C', true);
+        $pdf->Cell($w, $fontSize, $text, 0, 0, 'C', false);
     }
 
     /**
