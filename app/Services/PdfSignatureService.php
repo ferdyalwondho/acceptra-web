@@ -23,8 +23,11 @@ class PdfSignatureService
      * a pixel-exact measurement of whatever's underneath it on the original page (e.g. a
      * template's own pre-printed name) — a small safety margin keeps a slightly-too-small
      * or slightly-offset box from leaving a sliver of old content visible at its edge.
+     * Kept small deliberately — boxes are often placed right up against a table cell's own
+     * border lines, and too much padding paints over those borders instead of just the
+     * stray content next to them.
      */
-    private const FILL_PADDING = 4.0;
+    private const FILL_PADDING = 1.5;
 
     /**
      * Stream a PDF with signatures embedded.
@@ -292,6 +295,11 @@ class PdfSignatureService
             $pdf->AddPage('P', [$pageWidth, $pageHeight]);
             $pdf->SetFillColor(255, 255, 255);
 
+            // Resolve every box down to "will this actually draw anything, and with what
+            // data" up front — a box with nothing to draw (e.g. an empty punchlist field)
+            // must never get masked either, or it'd blank out whatever's already printed
+            // there on the original page for no reason.
+            $planned = [];
             foreach ($positions as $key => $pos) {
                 if ((int) ($pos['page'] ?? 1) !== 1) {
                     continue; // only page 1 is ever placed onto today
@@ -308,7 +316,11 @@ class PdfSignatureService
                 [$levelStr, $type] = explode('_', $key, 2);
 
                 if ($levelStr === 'doc') {
-                    $this->stampDocumentField($pdf, $document, $type, $x, $y, $w, $h);
+                    $text = $this->resolveDocumentFieldText($document, $type);
+                    if ($text === null || $text === '') {
+                        continue;
+                    }
+                    $planned[] = ['kind' => 'doc', 'x' => $x, 'y' => $y, 'w' => $w, 'h' => $h, 'type' => $type, 'text' => $text];
                     continue;
                 }
 
@@ -325,6 +337,33 @@ class PdfSignatureService
                         continue;
                     }
 
+                    $planned[] = ['kind' => 'sig', 'x' => $x, 'y' => $y, 'w' => $w, 'h' => $h, 'sig' => $sig];
+
+                } elseif ($type === 'name' && $step->approver) {
+                    $planned[] = ['kind' => 'name', 'x' => $x, 'y' => $y, 'w' => $w, 'h' => $h, 'step' => $step];
+                }
+            }
+
+            // Pass 1: mask every planned box first, all of them, before drawing any
+            // content. Whatever's underneath (a template's own pre-printed reference
+            // text, or a neighboring box's content) is fully white before a single
+            // signature or character gets drawn — no ordering dependency between boxes,
+            // so one box's fill can never partially erase another's already-drawn content.
+            foreach ($planned as $box) {
+                $this->fillBoxWithPadding($pdf, $box['x'], $box['y'], $box['w'], $box['h']);
+            }
+
+            // Pass 2: draw every planned box's actual content onto the now fully-masked page.
+            foreach ($planned as $box) {
+                ['x' => $x, 'y' => $y, 'w' => $w, 'h' => $h] = $box;
+
+                if ($box['kind'] === 'doc') {
+                    $this->drawDocumentField($pdf, $box['type'], $box['text'], $x, $y, $w, $h);
+                    continue;
+                }
+
+                if ($box['kind'] === 'sig') {
+                    $sig     = $box['sig'];
                     $ext     = strtolower(pathinfo($sig->image_path, PATHINFO_EXTENSION));
                     $sigTemp = tempnam(sys_get_temp_dir(), 'acc_sig_');
                     file_put_contents($sigTemp, Storage::get($sig->image_path));
@@ -336,37 +375,30 @@ class PdfSignatureService
                         default       => 'PNG',
                     };
 
-                    // Cover the full placement box first — a transparent-background
-                    // signature PNG wouldn't otherwise mask whatever sits underneath it
-                    // (e.g. a template's own pre-printed "PIC Name" line at this spot).
-                    $this->fillBoxWithPadding($pdf, $x, $y, $w, $h);
                     $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
 
-                } elseif ($type === 'name' && $step->approver) {
-                    $nameRowH = $h / 2;
-                    $dateRowH = $h - $nameRowH;
-                    $dateText = $step->action_at?->format('d M Y') ?? $step->offline_date?->format('d M Y');
-                    // FPDF's core fonts only render single-byte cp1252 — raw UTF-8 (e.g.
-                    // accented characters in a name) renders as mojibake without this.
-                    $name = $this->toPdfEncoding($step->approver->name);
+                    continue;
+                }
 
-                    $pdf->SetTextColor(0, 0, 0);
+                // 'name'
+                $step     = $box['step'];
+                $nameRowH = $h / 2;
+                $dateRowH = $h - $nameRowH;
+                $dateText = $step->action_at?->format('d M Y') ?? $step->offline_date?->format('d M Y');
+                // FPDF's core fonts only render single-byte cp1252 — raw UTF-8 (e.g.
+                // accented characters in a name) renders as mojibake without this.
+                $name = $this->toPdfEncoding($step->approver->name);
 
-                    // Cover the whole box up front — Cell()'s own fill only paints a band
-                    // as tall as the text itself, which doesn't fully mask pre-existing
-                    // content (e.g. a name the template already had printed at this exact
-                    // spot) that's taller or offset from the new text's tight bounding box.
-                    $this->fillBoxWithPadding($pdf, $x, $y, $w, $h);
+                $pdf->SetTextColor(0, 0, 0);
 
-                    $nameFontSize = $this->fitFontSize($pdf, $name, $w, $nameRowH, 'B');
-                    $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
-                    $pdf->Cell($w, $nameFontSize, $name, 0, 0, 'L', false);
+                $nameFontSize = $this->fitFontSize($pdf, $name, $w, $nameRowH, 'B');
+                $pdf->SetXY($x, $y + ($nameRowH - $nameFontSize) / 2);
+                $pdf->Cell($w, $nameFontSize, $name, 0, 0, 'L', false);
 
-                    if ($dateText) {
-                        $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
-                        $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
-                        $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', false);
-                    }
+                if ($dateText) {
+                    $dateFontSize = $this->fitFontSize($pdf, $dateText, $w, $dateRowH, '');
+                    $pdf->SetXY($x, $y + $nameRowH + ($dateRowH - $dateFontSize) / 2);
+                    $pdf->Cell($w, $dateFontSize, $dateText, 0, 0, 'L', false);
                 }
             }
 
@@ -415,27 +447,31 @@ class PdfSignatureService
         return $outputPath;
     }
 
-    private function stampDocumentField(
-        Fpdi $pdf,
-        Document $document,
-        string $type,
-        float $x,
-        float $y,
-        float $w,
-        float $h,
-    ): void {
-        $text = match ($type) {
+    /**
+     * Pure text lookup, no PDF side effects — used by buildOverlay()'s planning pass to
+     * decide whether a doc-level box has anything to draw (and therefore mask) at all,
+     * and again by drawDocumentField() to get the same text to actually draw.
+     */
+    private function resolveDocumentFieldText(Document $document, string $type): ?string
+    {
+        return match ($type) {
             'submitted' => $document->date_atp_submission?->format('d M Y'),
             'atpdate'   => $document->date_atp_approved?->format('d M Y'),
             'status'    => AtpStatusLabels::label($document->status_code ?? ''),
             'punchlist' => $document->atp_punchlist,
             default     => null,
         };
+    }
 
-        if ($text === null || $text === '') {
-            return;
-        }
-
+    private function drawDocumentField(
+        Fpdi $pdf,
+        string $type,
+        string $text,
+        float $x,
+        float $y,
+        float $w,
+        float $h,
+    ): void {
         // FPDF's core fonts only render single-byte cp1252 — every status label but
         // two contains a Unicode en-dash ("–"), which mojibakes without this.
         $text = $this->toPdfEncoding($text);
@@ -455,9 +491,6 @@ class PdfSignatureService
         }
 
         $pdf->SetTextColor(0, 0, 0);
-        // Cover the whole box first — see the "name" stamp in buildOverlay() for why
-        // Cell()'s own fill (only as tall as the text) isn't enough on its own.
-        $this->fillBoxWithPadding($pdf, $x, $y, $w, $h);
         $pdf->SetXY($x, $y + ($h - $fontSize) / 2);
         $pdf->Cell($w, $fontSize, $text, 0, 0, 'C', false);
     }
