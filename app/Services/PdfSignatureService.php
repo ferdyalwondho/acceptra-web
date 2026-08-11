@@ -136,22 +136,28 @@ class PdfSignatureService
     }
 
     /**
-     * Resolves to whichever local temp file FPDI will actually parse — the raw input if
-     * the free FPDI parser can read it directly, or a Ghostscript-normalized copy
-     * otherwise. Ghostscript's pdfwrite re-write can shift page geometry or corrupt
-     * embedded images (e.g. a scanned offline-approval signature), so it's only used as
-     * a fallback for PDFs FPDI genuinely can't parse as-is — never unconditionally.
+     * Resolves to whichever local temp file FPDI should import from — a Ghostscript-
+     * normalized copy of the original, or the raw file itself only if Ghostscript can't
+     * process it at all. Ghostscript's simplified pdfwrite output is what the free FPDI
+     * parser is reliably tested against; the raw original can carry embedded resources
+     * (e.g. a scanned offline-approval signature's image encoding) that FPDI's
+     * importPage()/useTemplate() silently drops without throwing — no exception, no log,
+     * the stamped page just quietly comes out missing that image. Coordinate accuracy is
+     * NOT a reason to prefer the raw file — that was traced to the placement editor's
+     * canvas being CSS-rescaled, independent of which source this resolves to.
      *
      * Walks every page the same way stampOnto() does (import + template size + place),
-     * not just setSourceFile() — some malformed PDFs parse their xref table fine but
-     * fail later on a specific page's content stream, and testing setSourceFile() alone
-     * would wrongly call those "parsable", diverging from what stampOnto() actually does.
+     * not just setSourceFile() — some PDFs parse their xref table fine but fail later on
+     * a specific page's content stream, and testing setSourceFile() alone would wrongly
+     * call those "parsable", diverging from what stampOnto() actually does.
      */
     private function resolveFpdiSource(string $rawInputPath): string
     {
         try {
+            $normalized = $this->decompressPdf($rawInputPath);
+
             $pdf       = new Fpdi('P', 'pt');
-            $pageCount = $pdf->setSourceFile($rawInputPath);
+            $pageCount = $pdf->setSourceFile($normalized);
 
             for ($p = 1; $p <= $pageCount; $p++) {
                 $tplId = $pdf->importPage($p);
@@ -160,9 +166,9 @@ class PdfSignatureService
                 $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height']);
             }
 
-            return $rawInputPath;
+            return $normalized;
         } catch (\Throwable) {
-            return $this->decompressPdf($rawInputPath);
+            return $rawInputPath;
         }
     }
 
@@ -200,16 +206,16 @@ class PdfSignatureService
             file_put_contents($tempInput, Storage::get($document->original_pdf_path));
 
             try {
-                // Prefer the raw original — Ghostscript's pdfwrite re-write can shift page
-                // geometry or corrupt embedded images (e.g. a scanned offline-approval
-                // signature). Only retried against a Ghostscript-normalized copy if the raw
-                // file trips up FPDI's free parser anywhere in the full stamping pass (not
-                // just at file-open time — some malformed PDFs parse their xref fine but
-                // fail later, e.g. importing a specific page's content stream).
-                $tempOutput = $this->stampOnto($tempInput, $document, $positions);
-            } catch (\Throwable) {
+                // Prefer a Ghostscript-normalized copy — see resolveFpdiSource() for why:
+                // the free FPDI parser can silently drop embedded resources (e.g. a scanned
+                // offline-approval signature's image) from the raw original without ever
+                // throwing, so "it didn't error" isn't proof the raw file is safe to stamp
+                // from. Only fall back to the raw file if Ghostscript itself can't process it.
                 $tempParsable = $this->decompressPdf($tempInput);
                 $tempOutput   = $this->stampOnto($tempParsable, $document, $positions);
+            } catch (\Throwable) {
+                $tempParsable = null;
+                $tempOutput   = $this->stampOnto($tempInput, $document, $positions);
             }
 
             $relPath = "documents/final/{$document->id}.pdf";
