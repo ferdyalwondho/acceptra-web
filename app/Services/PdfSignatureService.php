@@ -226,10 +226,11 @@ class PdfSignatureService
         // tempnam() already creates the file — don't append an extension onto a
         // separate path string, or the original tempnam()-created file becomes an
         // orphan that never gets cleaned up.
-        $tempInput    = tempnam(sys_get_temp_dir(), 'acc_orig_');
-        $tempParsable = null;
-        $tempOverlay  = null;
-        $tempOutput   = null;
+        $tempInput     = tempnam(sys_get_temp_dir(), 'acc_orig_');
+        $tempParsable  = null;
+        $tempFlattened = null;
+        $tempOverlay   = null;
+        $tempOutput    = null;
 
         try {
             file_put_contents($tempInput, Storage::get($document->original_pdf_path));
@@ -242,10 +243,21 @@ class PdfSignatureService
             [$pageWidth, $pageHeight] = $this->readPageOneSize($tempParsable);
 
             $tempOverlay = $this->buildOverlay($document, $positions, $pageWidth, $pageHeight);
-            // Merge onto the untouched raw original, not the Ghostscript-normalized copy —
+
+            // Some source PDFs (e.g. this app's own "Submit Ongoing" scanned uploads, or
+            // templates authored with a form tool) carry their pre-printed reference text
+            // as PDF annotations (FreeText/Widget) rather than plain page content.
+            // Annotations render in their own layer, on top of the page's content streams
+            // — our overlay's white-fill masking, which only affects content streams,
+            // can't cover them no matter how precisely the placement box is positioned.
+            // Flattening merges annotations into regular content first so they're subject
+            // to the same masking as everything else.
+            $tempFlattened = $this->flattenAnnotations($tempInput);
+
+            // Merge onto the flattened original, not the Ghostscript-normalized copy —
             // qpdf reads/writes standard and non-standard PDFs natively, and skipping an
             // unnecessary Ghostscript pass here avoids re-encoding the original at all.
-            $tempOutput = $this->mergeOverlay($tempInput, $tempOverlay);
+            $tempOutput = $this->mergeOverlay($tempFlattened, $tempOverlay);
 
             $relPath = "documents/final/{$document->id}.pdf";
             Storage::put($relPath, file_get_contents($tempOutput));
@@ -255,6 +267,9 @@ class PdfSignatureService
             @unlink($tempInput);
             if ($tempParsable) {
                 @unlink($tempParsable);
+            }
+            if ($tempFlattened) {
+                @unlink($tempFlattened);
             }
             if ($tempOverlay) {
                 @unlink($tempOverlay);
@@ -411,6 +426,32 @@ class PdfSignatureService
                 @unlink($f);
             }
         }
+    }
+
+    /**
+     * Pushes any page annotations (FreeText, Widget/form fields, etc.) into regular page
+     * content via qpdf. Non-fatal on failure — returns the input path unchanged, so a
+     * document that trips up this step still gets stamped, just without this protection.
+     */
+    private function flattenAnnotations(string $inputPath): string
+    {
+        $outputPath = tempnam(sys_get_temp_dir(), 'acc_flat_');
+
+        $cmd = sprintf(
+            'qpdf --flatten-annotations=all %s %s 2>&1',
+            escapeshellarg($inputPath),
+            escapeshellarg($outputPath)
+        );
+
+        exec($cmd, $out, $exit);
+
+        if (! in_array($exit, [0, 3], true) || ! file_exists($outputPath) || filesize($outputPath) === 0) {
+            @unlink($outputPath);
+
+            return $inputPath;
+        }
+
+        return $outputPath;
     }
 
     /**
