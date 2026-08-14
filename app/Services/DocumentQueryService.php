@@ -71,6 +71,16 @@ class DocumentQueryService
             $query->whereDate('date_atp_submission', '<=', $dateTo);
         }
 
+        // 6b. Overdue deep-link filter (from dashboard "Perlu Perhatian" panel / stat card)
+        // — same predicate as DashboardController's overdue query.
+        if ($request->input('filter') === 'overdue') {
+            $query->whereHas('approvalSteps', fn (Builder $q) =>
+                $q->where('is_active', true)
+                  ->where('status', 'pending')
+                  ->where('updated_at', '<', now()->subDays(7))
+            );
+        }
+
         // 7. Sorting — whitelist prevents SQL injection
         $sort = in_array($request->input('sort'), self::SORTABLE)
             ? $request->input('sort')

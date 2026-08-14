@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import ApprovalLayout from '@/layouts/ApprovalLayout';
 import StatusBadge from '@/components/acceptra/StatusBadge';
 import ApprovalTimeline, { type ApprovalStep } from '@/components/acceptra/ApprovalTimeline';
 import SignaturePad from '@/components/acceptra/SignaturePad';
 import PdfViewer from '@/components/acceptra/PdfViewer';
 import { cn } from '@/lib/utils';
-import type { ExcelAttachment } from '@/types';
+import type { ExcelAttachment, PageProps } from '@/types';
 import {
   Download, FileText, FileSpreadsheet, CheckCircle2, ClipboardList,
   XCircle, ArrowLeft, Users, AlertTriangle, Clock, Paperclip, X,
@@ -74,6 +74,14 @@ interface MyStepDone {
   action_at: string | null;
   punchlist_notes: string | null;
   reject_reason: string | null;
+  evidence_url: string | null;
+}
+
+interface PunchlistItem {
+  level: number;
+  role: string;
+  notes: string | null;
+  evidence_url: string | null;
 }
 
 interface Props {
@@ -84,12 +92,15 @@ interface Props {
   can_act?: boolean;
   my_step_done?: MyStepDone | null;
   punchlist_revision_pdf?: PunchlistRevisionPdf | null;
-  my_punchlist?: { notes: string; created_at: string } | null;
+  my_punchlist?: { notes: string; created_at: string; evidence_url: string | null } | null;
+  punchlist_items?: PunchlistItem[];
   all_verifications?: VerificationEntry[];
   user_signature_id?: string | null;
   user_signature_url?: string | null;
   pdf_url?: string | null;
   previous_pdf_url?: string | null;
+  previous_reject_reason?: string | null;
+  previous_reject_evidence_url?: string | null;
 }
 
 export default function ApprovalScreen({
@@ -101,11 +112,14 @@ export default function ApprovalScreen({
   my_step_done,
   punchlist_revision_pdf,
   my_punchlist,
+  punchlist_items = [],
   all_verifications = [],
   user_signature_id,
   user_signature_url,
   pdf_url,
   previous_pdf_url,
+  previous_reject_reason,
+  previous_reject_evidence_url,
 }: Props) {
   const [action,        setAction]        = useState<ActionType | null>(null);
   const [punchlistNote, setPunchlistNote] = useState('');
@@ -117,6 +131,9 @@ export default function ApprovalScreen({
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [flowStep,      setFlowStep]      = useState<FlowStep>('pick-action');
   const [submitting,    setSubmitting]    = useState(false);
+
+  const { errors } = usePage<PageProps>().props;
+  const errorMessages = errors ? Object.values(errors).filter(Boolean) : [];
 
   const btnBase = cn(
     'flex h-11 w-full items-center justify-center gap-2 rounded-md text-sm font-semibold',
@@ -210,6 +227,17 @@ export default function ApprovalScreen({
             <p className="text-xs font-semibold text-warning">Catatan Punchlist Anda</p>
           </div>
           <p className="text-sm text-[var(--color-text-primary)]">{my_punchlist.notes}</p>
+          {my_punchlist.evidence_url && (
+            <a
+              href={my_punchlist.evidence_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-warning underline underline-offset-2 hover:text-warning/80"
+            >
+              <Paperclip className="h-3 w-3" />
+              Lihat bukti punchlist
+            </a>
+          )}
         </div>
       )}
 
@@ -317,6 +345,67 @@ export default function ApprovalScreen({
         </div>
         <p className="mt-0.5 font-mono text-xs text-[var(--color-text-secondary)]">{doc.uniqueId} · {doc.sow}</p>
       </div>
+
+      {errorMessages.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg bg-danger-surface px-4 py-3 text-sm font-medium text-danger">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>{errorMessages.map((msg, i) => <p key={i}>{msg}</p>)}</div>
+        </div>
+      )}
+
+      {/* Reason this document was rejected and had to be revised */}
+      {previous_reject_reason && (
+        <div className="rounded-lg border border-warning/30 bg-warning-surface/60 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-warning" />
+            <p className="text-xs font-semibold text-warning">Alasan Reject Sebelumnya</p>
+          </div>
+          <p className="whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">{previous_reject_reason}</p>
+          {previous_reject_evidence_url && (
+            <a
+              href={previous_reject_evidence_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-warning underline underline-offset-2 hover:text-warning/80"
+            >
+              <Paperclip className="h-3 w-3" />
+              Lihat bukti reject
+            </a>
+          )}
+        </div>
+      )}
+
+      {/* Punchlist notes + evidence from the approvers who flagged this revision —
+          most relevant when Admin sanity-checks the Subcon's fix (status 17). */}
+      {punchlist_items.length > 0 && (
+        <div className="rounded-lg border border-warning/30 bg-warning-surface/60 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <ClipboardList className="h-4 w-4 text-warning" />
+            <p className="text-xs font-semibold text-warning">Catatan Punchlist dari Approver</p>
+          </div>
+          <div className="space-y-3">
+            {punchlist_items.map((item, i) => (
+              <div key={i} className={i > 0 ? 'border-t border-warning/20 pt-3' : ''}>
+                <p className="text-xs font-medium text-[var(--color-text-secondary)]">L{item.level} · {item.role}</p>
+                {item.notes && (
+                  <p className="mt-0.5 whitespace-pre-wrap text-sm text-[var(--color-text-primary)]">{item.notes}</p>
+                )}
+                {item.evidence_url && (
+                  <a
+                    href={item.evidence_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-warning underline underline-offset-2 hover:text-warning/80"
+                  >
+                    <Paperclip className="h-3 w-3" />
+                    Lihat bukti punchlist
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Approval timeline compact */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-4">
@@ -507,12 +596,34 @@ export default function ApprovalScreen({
           <div className="mt-3 rounded border border-warning/30 bg-warning-surface/40 p-3">
             <p className="mb-1 text-xs font-semibold text-warning">Catatan Punchlist</p>
             <p className="text-sm text-[var(--color-text-primary)]">{my_step_done.punchlist_notes}</p>
+            {my_step_done.evidence_url && (
+              <a
+                href={my_step_done.evidence_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-medium text-warning underline underline-offset-2 hover:text-warning/80"
+              >
+                <Paperclip className="h-3 w-3" />
+                Lihat bukti punchlist
+              </a>
+            )}
           </div>
         )}
         {my_step_done.reject_reason && (
           <div className="mt-3 rounded border border-danger/20 bg-white/60 p-3">
             <p className="mb-1 text-xs font-semibold text-danger">Alasan Penolakan</p>
             <p className="text-sm text-[var(--color-text-primary)]">{my_step_done.reject_reason}</p>
+            {my_step_done.evidence_url && (
+              <a
+                href={my_step_done.evidence_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-medium text-danger underline underline-offset-2 hover:text-danger/80"
+              >
+                <Paperclip className="h-3 w-3" />
+                Lihat bukti reject
+              </a>
+            )}
           </div>
         )}
       </div>

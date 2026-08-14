@@ -83,7 +83,7 @@ class UserController extends Controller
                 ->pluck('cluster.display_name')
                 ->filter()
                 ->values(),
-        ]);
+        ])->withQueryString();
 
         return Inertia::render('Users/Index', [
             'users'   => $users,

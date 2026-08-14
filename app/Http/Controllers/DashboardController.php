@@ -51,34 +51,52 @@ class DashboardController extends Controller
             'completed'     => Document::whereIn('status_code', ['13', '16'])->count(),
         ];
 
-        // 2. Overdue approvals: pending step activated > 7 days ago
-        $overdueDocuments = Document::with(['partner'])
-            ->whereHas('approvalSteps', fn ($q) =>
-                $q->where('is_active', true)
-                  ->where('status', 'pending')
-                  ->where('updated_at', '<', now()->subDays(7))
+        // 2. Overdue approvals: pending step activated > 7 days ago. The true count must
+        // come from an unlimited query — counting an already-`limit()`'d collection caps
+        // the stat at that limit regardless of how many actually exist.
+        $overdueQuery = Document::whereHas('approvalSteps', fn ($q) =>
+            $q->where('is_active', true)
+              ->where('status', 'pending')
+              ->where('updated_at', '<', now()->subDays(7))
+        );
+
+        $metrics['overdue_count'] = (clone $overdueQuery)->count();
+
+        // Top 5 longest-waiting — ordered by the active step's own updated_at (how long
+        // it's actually been sitting), not the document's created_at.
+        $overdueDocuments = $overdueQuery
+            ->with(['partner', 'approvalSteps' => fn ($q) =>
+                $q->where('is_active', true)->where('status', 'pending')])
+            ->orderBy(
+                ApprovalStep::select('updated_at')
+                    ->whereColumn('document_id', 'documents.id')
+                    ->where('is_active', true)
+                    ->where('status', 'pending')
+                    ->limit(1),
+                'asc'
             )
-            ->orderByDesc('created_at')
-            ->limit(10)
+            ->limit(5)
             ->get();
 
-        $metrics['overdue_count'] = $overdueDocuments->count();
+        $overdueApprovals = $overdueDocuments->map(function (Document $doc) {
+            $activeStep = $doc->approvalSteps->first();
 
-        $overdueApprovals = $overdueDocuments->map(fn (Document $doc) => [
-            'id'           => $doc->id,
-            'uniqueId'     => $doc->unique_id,
-            'project'      => $doc->link_name ?? $doc->pt_index,
-            'sow'          => $doc->sow_name,
-            'partner'      => $doc->partner?->name,
-            'statusCode'   => $doc->status_code,
-            'waitingSince' => $doc->updated_at->format('d M Y'),
-        ]);
+            return [
+                'id'           => $doc->id,
+                'uniqueId'     => $doc->unique_id,
+                'project'      => $doc->link_name ?? $doc->pt_index,
+                'sow'          => $doc->sow_name,
+                'partner'      => $doc->partner?->name,
+                'statusCode'   => $doc->status_code,
+                'waitingSince' => $activeStep?->updated_at->format('d M Y'),
+            ];
+        });
 
-        // 3. Active documents (not done, not draft), last 10
+        // 3. Active documents (not done, not draft), last 5
         $activeDocuments = Document::with(['partner', 'approvalSteps'])
             ->whereNotIn('status_code', ['draft', '13', '16'])
             ->orderByDesc('created_at')
-            ->limit(10)
+            ->limit(5)
             ->get()
             ->map(fn (Document $doc) => [
                 'id'          => $doc->id,
@@ -95,7 +113,7 @@ class DashboardController extends Controller
         // 4. Recent activity from audit_logs
         $recentActivity = AuditLog::with(['user', 'document'])
             ->orderByDesc('created_at')
-            ->limit(10)
+            ->limit(5)
             ->get()
             ->map(fn (AuditLog $log) => [
                 'id'                => $log->id,
@@ -325,19 +343,17 @@ class DashboardController extends Controller
             ->when($approverId, fn ($q) => $q->where('approver_id', $approverId))
             ->count();
 
-        // A step stays 'approved_with_punchlist' forever once set — it only really
-        // becomes a "PASS" once its punchlist has actually been verified. Same
-        // supersede pattern as Approvals/History (ApprovalController.php:121-127):
-        // the PunchlistVerification row (created only once the whole approval chain
-        // finishes) is the source of truth for "verified", not the frozen step status.
-        $approved = ApprovalStep::when($approverId, fn ($q) => $q->where('approver_id', $approverId))
-            ->where(function ($q) {
-                $q->whereIn('status', ['approved', 'offline_approved', 'skipped'])
-                  ->orWhere(function ($q) {
-                      $q->where('status', 'approved_with_punchlist')
-                        ->whereHas('punchlistVerification', fn ($v) => $v->where('status', 'verified'));
-                  });
-            })
+        // PASS = distinct DOCUMENTS this approver has cleanly approved, not a count of
+        // approve actions — approval_steps only reflects the CURRENT rectification cycle
+        // (rows get hard-deleted and recreated on every reject+resubmit), so counting rows
+        // there would make re-approving the same document after a downstream rejection look
+        // like a second, separate "pass". audit_logs is append-only and never rebuilt, so
+        // counting distinct document_id from it gives a stable per-document fact instead.
+        // approve_with_punchlist is deliberately excluded — it's tracked by its own
+        // "PASS with PL" stat below, even once verified.
+        $approved = AuditLog::whereIn('event', ['step.approved', 'step.offline_imported', 'document.auto_approved_l1'])
+            ->when($approverId, fn ($q) => $q->where('user_id', $approverId))
+            ->distinct('document_id')
             ->count();
 
         // Approved with punchlist and not yet verified — this covers the whole time

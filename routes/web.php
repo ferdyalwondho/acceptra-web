@@ -152,6 +152,8 @@ Route::middleware('auth')->group(function () {
     Route::post('/documents/{id}/verify',   [PunchlistController::class, 'verify'])->name('approvals.verify');
     Route::get('/documents/{id}/approval-steps/{stepId}/evidence',
         [ApprovalController::class, 'downloadEvidence'])->name('approvals.evidence');
+    Route::get('/documents/{id}/previous-reject-evidence',
+        [ApprovalController::class, 'downloadPreviousRejectEvidence'])->name('approvals.previous-reject-evidence');
     Route::get('/documents/{id}/punchlist-verifications/{verificationId}/evidence',
         [PunchlistController::class, 'downloadEvidence'])->name('approvals.verification-evidence');
 
