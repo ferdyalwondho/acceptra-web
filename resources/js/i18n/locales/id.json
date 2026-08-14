@@ -173,6 +173,7 @@
     "description": "Ringkasan status dokumen ATP real-time.",
     "btn_new_request": "New Request",
     "overdue_alert": "Perlu Perhatian — {{count}} dokumen pending lebih dari 7 hari",
+    "overdue_see_all": "Lihat semua",
     "since": "Sejak",
     "chart_status_title": "Distribusi Status",
     "chart_status_empty": "Belum ada dokumen.",

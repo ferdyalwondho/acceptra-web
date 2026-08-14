@@ -173,6 +173,7 @@
     "description": "Real-time ATP document status summary.",
     "btn_new_request": "New Request",
     "overdue_alert": "Attention — {{count}} documents pending more than 7 days",
+    "overdue_see_all": "See all",
     "since": "Since",
     "chart_status_title": "Status Distribution",
     "chart_status_empty": "No documents yet.",

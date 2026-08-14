@@ -199,11 +199,16 @@ export default function DashboardAdmin({
       {/* Perlu Perhatian — overdue approvals */}
       {overdue_approvals.length > 0 && (
         <div className="mb-6 rounded-lg border border-[var(--color-brand-surface)] bg-[var(--color-brand-surface)] shadow-xs">
-          <div className="flex items-center gap-2 border-b border-brand/20 px-5 py-3.5">
-            <AlertTriangle className="h-4 w-4 text-brand-ink" />
-            <h2 className="text-sm font-semibold text-brand-ink">
-              {t('admin_dashboard.overdue_alert', { count: overdue_approvals.length })}
-            </h2>
+          <div className="flex items-center justify-between gap-2 border-b border-brand/20 px-5 py-3.5">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-brand-ink" />
+              <h2 className="text-sm font-semibold text-brand-ink">
+                {t('admin_dashboard.overdue_alert', { count: metrics.overdue_count })}
+              </h2>
+            </div>
+            <Link href="/documents?filter=overdue" className="text-xs text-ming hover:underline">
+              {t('admin_dashboard.overdue_see_all')}
+            </Link>
           </div>
           <div className="divide-y divide-brand/10">
             {overdue_approvals.map((doc) => (

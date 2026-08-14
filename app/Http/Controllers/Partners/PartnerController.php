@@ -61,7 +61,7 @@ class PartnerController extends Controller
             'status'          => $p->status,
             'pics_count'      => $p->pics_count ?? 0,
             'documents_count' => (int) ($p->documents_count ?? 0),
-        ]);
+        ])->withQueryString();
 
         return Inertia::render('Partners/Index', [
             'partners'   => $partners,

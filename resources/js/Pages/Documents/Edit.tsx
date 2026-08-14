@@ -5,7 +5,7 @@ import AppShell, { PageHeader } from '@/layouts/AppShell';
 import SearchableSelect from '@/components/acceptra/SearchableSelect';
 import { useDuplicateCheck } from '@/hooks/use-duplicate-check';
 import { cn } from '@/lib/utils';
-import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, FileText, Info, Paperclip, X } from 'lucide-react';
 import type { PageProps, PartnerOption, TemplateOption, TemplateLevelOption, ClusterOption } from '@/types';
 
 interface DraftDoc {
@@ -34,6 +34,13 @@ interface ResolvedApprover {
   approver: { id: string; name: string } | null;
 }
 
+interface PunchlistItem {
+  level: number;
+  role: string;
+  notes: string | null;
+  evidence_url: string | null;
+}
+
 interface Props extends PageProps {
   document: DraftDoc;
   templates: TemplateOption[];
@@ -43,6 +50,7 @@ interface Props extends PageProps {
   is_punchlist_revision?: boolean;
   is_rejected_revision?: boolean;
   atp_punchlist?: string | null;
+  punchlist_items?: PunchlistItem[];
   last_revision_filename?: string | null;
 }
 
@@ -105,6 +113,7 @@ export default function DocumentEdit({
   is_punchlist_revision = false,
   is_rejected_revision = false,
   atp_punchlist,
+  punchlist_items = [],
   last_revision_filename,
 }: Props) {
   const [levels, setLevels]       = useState<TemplateLevelOption[]>([]);
@@ -231,7 +240,30 @@ export default function DocumentEdit({
           </span>
         </div>
 
-        {atp_punchlist && (
+        {punchlist_items.length > 0 ? (
+          <div className="mb-4 max-w-3xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
+            <p className="mb-2 font-semibold text-amber-800">Catatan Punchlist dari Approver</p>
+            <div className="space-y-3">
+              {punchlist_items.map((item, i) => (
+                <div key={i} className={i > 0 ? 'border-t border-amber-200 pt-3' : ''}>
+                  <p className="text-xs font-medium text-amber-800">L{item.level} · {item.role}</p>
+                  {item.notes && <p className="mt-0.5 whitespace-pre-wrap text-amber-700">{item.notes}</p>}
+                  {item.evidence_url && (
+                    <a
+                      href={item.evidence_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
+                    >
+                      <Paperclip className="h-3 w-3" />
+                      Lihat bukti punchlist
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : atp_punchlist && (
           <div className="mb-4 max-w-3xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
             <p className="mb-1 font-semibold text-amber-800">Catatan Punchlist dari Approver</p>
             <p className="whitespace-pre-wrap text-amber-700">{atp_punchlist}</p>

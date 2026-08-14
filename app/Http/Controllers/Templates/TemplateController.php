@@ -73,7 +73,7 @@ class TemplateController extends Controller
                 'requires_signature' => $l->requires_signature,
             ])->values(),
             'documents_count' => (int) ($t->documents_count ?? 0),
-        ]);
+        ])->withQueryString();
 
         return Inertia::render('Templates/Index', [
             'templates'  => $templates,

@@ -38,6 +38,7 @@ export interface PageProps {
   l1PendingCount?: number;
   show_get_started_modal?: boolean;
   flash?: { success?: string; error?: string };
+  errors?: Record<string, string>;
   [key: string]: unknown;
 }
 
@@ -385,6 +386,7 @@ export interface DocumentFilters {
   date_to: string | null;
   sort: string;
   dir: 'asc' | 'desc';
+  filter: string | null;
 }
 
 // ── Deleted Documents Log ────────────────────────────────────────────────

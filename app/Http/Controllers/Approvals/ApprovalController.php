@@ -193,6 +193,9 @@ class ApprovalController extends Controller
                         'action_at'       => $myStep->action_at?->format('d M Y, H:i'),
                         'punchlist_notes' => $myStep->punchlist_notes,
                         'reject_reason'   => $myStep->reject_reason,
+                        'evidence_url'    => $myStep->evidence_path
+                            ? route('approvals.evidence', ['id' => $document->id, 'stepId' => $myStep->id])
+                            : null,
                     ];
                 }
             }
@@ -240,6 +243,29 @@ class ApprovalController extends Controller
             'previous_pdf_url' => $showPreviousPdf
                 ? route('documents.pdf.previous', $document->id)
                 : null,
+            // Shown to every level throughout this rectification cycle (not just whoever
+            // originally rejected it), so all reviewers know why the Partner had to revise.
+            'previous_reject_reason' => $document->previous_pdf_rejected_level !== null
+                ? $document->previous_reject_reason
+                : null,
+            'previous_reject_evidence_url' => ($document->previous_pdf_rejected_level !== null && $document->previous_reject_evidence_path)
+                ? route('approvals.previous-reject-evidence', $document->id)
+                : null,
+            // Per-approver punchlist notes + evidence from the completed chain — surfaced
+            // here so L1's sanity-check review of the Subcon's fix (status '17') isn't
+            // reviewing blind. The underlying ApprovalStep rows are never deleted for the
+            // punchlist flow (unlike a full reject, which rebuilds the whole chain), so this
+            // reads straight off them rather than needing a separate snapshot.
+            'punchlist_items' => $document->approvalSteps
+                ->where('status', 'approved_with_punchlist')
+                ->map(fn (ApprovalStep $s) => [
+                    'level'        => $s->level_order,
+                    'role'         => self::ROLE_LABELS[$s->role] ?? $s->role,
+                    'notes'        => $s->punchlist_notes,
+                    'evidence_url' => $s->evidence_path
+                        ? route('approvals.evidence', ['id' => $document->id, 'stepId' => $s->id])
+                        : null,
+                ])->values()->all(),
         ];
 
         // Verify mode: status 15 + user has punchlist_verification for this doc
@@ -265,8 +291,11 @@ class ApprovalController extends Controller
                     ? route('documents.pdf.previous', $document->id)
                     : null;
                 $props['my_punchlist'] = $myStep ? [
-                    'notes'      => $myStep->punchlist_notes,
-                    'created_at' => $myStep->action_at?->toISOString(),
+                    'notes'        => $myStep->punchlist_notes,
+                    'created_at'   => $myStep->action_at?->toISOString(),
+                    'evidence_url' => $myStep->evidence_path
+                        ? route('approvals.evidence', ['id' => $document->id, 'stepId' => $myStep->id])
+                        : null,
                 ] : null;
                 $props['punchlist_revision_pdf'] = $revisionPdf ? [
                     'url'         => route('attachments.download', [
@@ -620,6 +649,25 @@ class ApprovalController extends Controller
         abort_if(! $step->evidence_path || ! Storage::exists($step->evidence_path), 404, 'Evidence file not found.');
 
         return Storage::response($step->evidence_path, $step->evidence_original_filename ?? 'evidence');
+    }
+
+    // The evidence for a previous rejection cycle is kept on the Document itself (the
+    // ApprovalStep row that originally held it gets deleted when the chain is rebuilt for
+    // resubmission), so it's served by document id rather than by step id.
+    public function downloadPreviousRejectEvidence(Request $request, string $documentId)
+    {
+        $user     = $request->user();
+        $document = Document::findOrFail($documentId);
+
+        $this->authorizeEvidenceAccess($user, $document);
+
+        abort_if(
+            ! $document->previous_reject_evidence_path || ! Storage::exists($document->previous_reject_evidence_path),
+            404,
+            'Evidence file not found.'
+        );
+
+        return Storage::response($document->previous_reject_evidence_path, $document->previous_reject_evidence_filename ?? 'evidence');
     }
 
     private function authorizeEvidenceAccess(object $user, Document $document): void

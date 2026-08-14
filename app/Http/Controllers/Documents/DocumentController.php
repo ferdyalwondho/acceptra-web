@@ -75,7 +75,8 @@ class DocumentController extends Controller
                 'active_step'     => ($step = $doc->approvalSteps->firstWhere('is_active', true))
                     ? 'L' . $step->level_order . ' — ' . (self::ROLE_LABELS[$step->role] ?? $step->role)
                     : ($doc->routing_pending ? 'Awaiting Routing (L2–L4)' : null),
-            ]);
+            ])
+            ->withQueryString();
 
         return Inertia::render('Documents/Index', [
             'documents'  => $documents,
@@ -88,6 +89,7 @@ class DocumentController extends Controller
                 'date_to'     => $request->input('date_to'),
                 'sort'        => $request->input('sort', 'created_at'),
                 'dir'         => $request->input('dir', 'desc'),
+                'filter'      => $request->input('filter'),
             ],
             'partners'   => in_array($user->role, self::AVIAT_ROLES)
                 ? Partner::where('status', 'active')->orderBy('name')->get(['id', 'name'])
@@ -348,7 +350,7 @@ class DocumentController extends Controller
             'reason'          => $l->reason,
             'deleted_by_name' => $l->deleted_by_name,
             'deleted_at'      => $l->deleted_at->format('d M Y H:i'),
-        ]);
+        ])->withQueryString();
 
         return Inertia::render('Documents/Deleted', [
             'logs'    => $logs,
@@ -408,6 +410,16 @@ class DocumentController extends Controller
                 'is_punchlist_revision'  => true,
                 'last_revision_filename' => $lastRevision?->original_filename,
                 'atp_punchlist'          => $document->atp_punchlist,
+                'punchlist_items'        => $document->approvalSteps
+                    ->where('status', 'approved_with_punchlist')
+                    ->map(fn (ApprovalStep $s) => [
+                        'level'        => $s->level_order,
+                        'role'         => self::ROLE_LABELS[$s->role] ?? $s->role,
+                        'notes'        => $s->punchlist_notes,
+                        'evidence_url' => $s->evidence_path
+                            ? route('approvals.evidence', ['id' => $document->id, 'stepId' => $s->id])
+                            : null,
+                    ])->values()->all(),
             ]);
         }
 
@@ -1003,14 +1015,29 @@ class DocumentController extends Controller
         // For rejected documents, record which level rejected it (for audit/status-code
         // flavor only — the approval chain itself always restarts from L1 regardless).
         // Rejection codes follow level_order * 3 - 1 (02=L1, 05=L2, 08=L3, 11=L4).
-        $rejectionLevel = null;
+        $rejectionLevel          = null;
+        $rejectReason            = null;
+        $rejectEvidencePath      = null;
+        $rejectEvidenceFilename  = null;
         if ($isRejected) {
             $rejectionLevel = (int) (((int) ltrim($document->status_code, '0') + 1) / 3);
+
+            // The rejected step still holds its reason/evidence at this point — grab it
+            // before finalizeSubmission() rebuilds the whole approval chain from scratch,
+            // which deletes this row along with every other step.
+            $rejectedStep = ApprovalStep::where('document_id', $document->id)
+                ->where('status', 'rejected')
+                ->latest('action_at')
+                ->first();
+
+            $rejectReason           = $rejectedStep?->reject_reason;
+            $rejectEvidencePath     = $rejectedStep?->evidence_path;
+            $rejectEvidenceFilename = $rejectedStep?->evidence_original_filename;
         }
 
         return $this->finalizeSubmission(
             $document, $validated, $user, $isAdmin,
-            $isRejected, $rejectionLevel,
+            $isRejected, $rejectionLevel, $rejectReason, $rejectEvidencePath, $rejectEvidenceFilename,
             $pdfPath, $previousPdfPath, $pdfChanged, $templateChanged,
         );
     }
@@ -1062,6 +1089,7 @@ class DocumentController extends Controller
         return $this->finalizeSubmission(
             $document, $validated, $user, $isAdmin,
             isRejected: false, rejectionLevel: null,
+            rejectReason: null, rejectEvidencePath: null, rejectEvidenceFilename: null,
             pdfPath: $document->original_pdf_path, previousPdfPath: null,
             pdfChanged: false, templateChanged: false,
         );
@@ -1074,6 +1102,9 @@ class DocumentController extends Controller
         bool $isAdmin,
         bool $isRejected,
         ?int $rejectionLevel,
+        ?string $rejectReason,
+        ?string $rejectEvidencePath,
+        ?string $rejectEvidenceFilename,
         string $pdfPath,
         ?string $previousPdfPath,
         bool $pdfChanged,
@@ -1081,7 +1112,7 @@ class DocumentController extends Controller
     ): RedirectResponse {
         $nextActiveStep = null;
 
-        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $pdfChanged, $templateChanged, &$nextActiveStep) {
+        DB::transaction(function () use ($validated, $user, $isAdmin, $document, $pdfPath, $previousPdfPath, $isRejected, $rejectionLevel, $rejectReason, $rejectEvidencePath, $rejectEvidenceFilename, $pdfChanged, $templateChanged, &$nextActiveStep) {
             $template = Template::with('levels')->findOrFail($validated['template_id']);
 
             // Placement only needs to be redone if the PDF or the approval template changed;
@@ -1108,8 +1139,11 @@ class DocumentController extends Controller
             ];
 
             if ($isRejected) {
-                $updateData['previous_pdf_path']           = $previousPdfPath;
-                $updateData['previous_pdf_rejected_level'] = $rejectionLevel;
+                $updateData['previous_pdf_path']                   = $previousPdfPath;
+                $updateData['previous_pdf_rejected_level']         = $rejectionLevel;
+                $updateData['previous_reject_reason']              = $rejectReason;
+                $updateData['previous_reject_evidence_path']       = $rejectEvidencePath;
+                $updateData['previous_reject_evidence_filename']   = $rejectEvidenceFilename;
             }
 
             // PdfSignatureService::getPdfPath() caches a signed PDF at final_pdf_path and keeps
@@ -1691,14 +1725,14 @@ class DocumentController extends Controller
 
         $validated = $request->validate($rules, $messages);
 
-        // Auto-resolve L2-L4 approvers from the cluster mapping. Only required when Admin is
-        // actually submitting (not saving a draft) — Partner submissions defer routing entirely
-        // to the L1 approver's cluster-resolution step (see ApprovalController::approve()).
+        // Validate L2-L4 approver coverage from the cluster mapping whenever a real (non-draft)
+        // submission happens — Partner submissions used to skip this and only find out about
+        // missing PICs later, silently, when an Admin tried to approve L1.
         $template = Template::with('levels')
             ->where('status', 'active')
             ->find($validated['template_id']);
 
-        if ($isAdmin && ! $isDraft && $template) {
+        if (! $isDraft && $template) {
             $levels = $template->levels->where('level_order', '>', 1)->values();
             [$resolved, $missing] = ClusterApproverResolutionService::resolveForLevels($validated['cluster_zone'], $levels);
 
@@ -1707,12 +1741,18 @@ class DocumentController extends Controller
                     ->map(fn ($role, $lvl) => "L{$lvl} (" . (self::ROLE_LABELS[$role] ?? $role) . ')')
                     ->implode(', ');
 
-                throw ValidationException::withMessages([
-                    'cluster_zone' => ["Cluster '{$validated['cluster_zone']}' belum punya PIC untuk: {$missingLabels}. Lengkapi dulu lewat menu Users."],
-                ]);
+                $message = $isAdmin
+                    ? "Cluster '{$validated['cluster_zone']}' belum punya PIC untuk: {$missingLabels}. Lengkapi dulu lewat menu Users."
+                    : 'Level approver masih ada yang kosong untuk cluster yang dipilih. Silahkan kontak Admin Aviat.';
+
+                throw ValidationException::withMessages(['cluster_zone' => [$message]]);
             }
 
-            $validated['pics'] = $resolved;
+            // Only Admin submissions auto-assign PICs here — Partner submissions defer
+            // routing to the L1 approver's cluster-resolution step (ApprovalController::approve()).
+            if ($isAdmin) {
+                $validated['pics'] = $resolved;
+            }
         }
 
         return $validated;
