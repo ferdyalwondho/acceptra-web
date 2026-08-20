@@ -14,6 +14,7 @@ use App\Models\PunchlistVerification;
 use App\Models\Signature;
 use App\Services\AuditService;
 use App\Services\ClusterApproverResolutionService;
+use App\Support\SignatureImage;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -356,13 +357,13 @@ class ApprovalController extends Controller
             if (! $signatureId && $request->filled('signature_data')) {
                 $dataUrl = $request->input('signature_data');
                 if (str_starts_with($dataUrl, 'data:image/')) {
-                    preg_match('/^data:image\/(\w+);base64,/', $dataUrl, $m);
-                    $ext     = in_array($m[1] ?? '', ['png', 'jpeg', 'jpg', 'gif', 'webp']) ? ($m[1] === 'jpeg' ? 'jpg' : $m[1]) : 'png';
                     $decoded = base64_decode(substr($dataUrl, strpos($dataUrl, ',') + 1), strict: true);
                     if ($decoded !== false) {
+                        // Always re-encoded and stored as PNG — normalize() strips
+                        // encodings (e.g. interlaced PNG) FPDF's stamper can't read.
                         $fileToken = (string) Str::uuid7();
-                        $path      = "signatures/{$user->id}/{$fileToken}.{$ext}";
-                        Storage::put($path, $decoded);
+                        $path      = "signatures/{$user->id}/{$fileToken}.png";
+                        Storage::put($path, SignatureImage::normalize($decoded));
                         Signature::where('user_id', $user->id)->update(['is_active' => false]);
                         $sig         = Signature::create(['user_id' => $user->id, 'image_path' => $path, 'is_active' => true]);
                         $signatureId = $sig->id;
