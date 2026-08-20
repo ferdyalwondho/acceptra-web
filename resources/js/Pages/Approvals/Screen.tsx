@@ -132,7 +132,7 @@ export default function ApprovalScreen({
       action:          action === 'punchlist' ? 'approve_with_punchlist' : 'approve',
       punchlist_notes: punchlistNote,
       evidence_file:   action === 'punchlist' ? punchlistEvidence : null,
-      signature_id:    signatureId ?? user_signature_id ?? null,
+      signature_id:    signatureId ?? (signatureData ? null : user_signature_id) ?? null,
       signature_data:  signatureData ?? null,
     }, {
       forceFormData: true,

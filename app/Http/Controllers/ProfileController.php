@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Signature;
+use App\Support\SignatureImage;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -65,16 +66,16 @@ class ProfileController extends Controller
         $dataUrl = $request->input('data_url');
         abort_if(! str_starts_with($dataUrl, 'data:image/'), 422, 'Invalid image data.');
 
-        preg_match('/^data:image\/(\w+);base64,/', $dataUrl, $m);
-        $ext     = in_array($m[1] ?? '', ['png', 'jpeg', 'jpg', 'gif', 'webp']) ? ($m[1] === 'jpeg' ? 'jpg' : $m[1]) : 'png';
         $decoded = base64_decode(substr($dataUrl, strpos($dataUrl, ',') + 1), strict: true);
         abort_if($decoded === false, 422, 'Invalid base64 data.');
 
         $userId    = $request->user()->id;
         $fileToken = (string) Str::uuid7();
-        $path      = "signatures/{$userId}/{$fileToken}.{$ext}";
+        // Always re-encoded and stored as PNG — normalize() strips encodings
+        // (e.g. interlaced PNG) FPDF's stamper can't read.
+        $path      = "signatures/{$userId}/{$fileToken}.png";
 
-        Storage::put($path, $decoded);
+        Storage::put($path, SignatureImage::normalize($decoded));
 
         DB::transaction(function () use ($userId, $path) {
             Signature::where('user_id', $userId)->update(['is_active' => false]);
