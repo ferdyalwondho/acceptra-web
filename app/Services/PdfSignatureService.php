@@ -390,7 +390,22 @@ class PdfSignatureService
                         default       => 'PNG',
                     };
 
-                    $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
+                    // A single malformed/legacy-encoded signature (e.g. an interlaced
+                    // PNG predating SignatureImage::normalize()) must not blank out the
+                    // *entire* PDF — FPDF throws on those, and letting that propagate
+                    // aborts the whole overlay, falling back to the fully unstamped
+                    // original for every level and every doc-level field, not just this
+                    // one box. Skip just this box instead, the same as a missing file.
+                    try {
+                        $pdf->Image($sigTemp, $x, $y, $w, $h, $imgType);
+                    } catch (\Throwable $e) {
+                        Log::error('PdfSignatureService: failed to draw signature image', [
+                            'document_id'  => $document->id,
+                            'signature_id' => $sig->id,
+                            'image_path'   => $sig->image_path,
+                            'exception'    => $e->getMessage(),
+                        ]);
+                    }
 
                     continue;
                 }
