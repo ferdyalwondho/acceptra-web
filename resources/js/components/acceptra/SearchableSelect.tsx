@@ -111,7 +111,10 @@ export default function SearchableSelect({ options, value, onChange, placeholder
         <div
           ref={dropdownRef}
           style={{ position: 'fixed', top: position.top, left: position.left, width: position.width }}
-          className="z-50 max-h-56 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-md"
+          // Rendered in a portal on document.body, so this competes with every other
+          // fixed-position layer by z-index alone — including modals (up to z-[410]
+          // for the Document detail page's dialogs). Keep this above all of them.
+          className="z-[500] max-h-56 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-md"
         >
           {filteredOptions.length === 0 ? (
             <p className="px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
