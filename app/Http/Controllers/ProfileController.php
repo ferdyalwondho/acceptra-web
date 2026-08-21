@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\InvitationLinkShare;
 use App\Models\Signature;
 use App\Support\SignatureImage;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -110,6 +112,35 @@ class ProfileController extends Controller
         });
 
         return redirect()->back()->with('success', 'Tanda tangan aktif diperbarui.');
+    }
+
+    // GET /profile/invitation-history — riwayat siapa saja yang pernah membagikan link
+    // undangan akun ini secara langsung (bypass email), agar user bisa mengaudit sendiri.
+    // Tetap terlihat walau akun sudah aktif — tidak difilter berdasarkan status.
+    public function invitationHistory(Request $request): JsonResponse
+    {
+        $shares = InvitationLinkShare::where('user_id', $request->user()->id)
+            ->with('sharedBy:id,name')
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn (InvitationLinkShare $s) => [
+                'id'             => $s->id,
+                'shared_by_name' => $s->sharedBy->name,
+                'created_at'     => $s->created_at->toISOString(),
+                'note'           => $s->note,
+            ]);
+
+        return response()->json(['data' => $shares]);
+    }
+
+    // GET /profile/invitation-history/{shareId}/evidence — hanya milik user sendiri.
+    public function invitationHistoryEvidence(Request $request, string $shareId)
+    {
+        $share = InvitationLinkShare::where('user_id', $request->user()->id)->findOrFail($shareId);
+
+        abort_if(! Storage::exists($share->evidence_path), 404, 'Evidence file not found.');
+
+        return Storage::response($share->evidence_path, $share->evidence_original_filename ?? 'evidence');
     }
 
     public static function sigToDataUrl(string $path): string

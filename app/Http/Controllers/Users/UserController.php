@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Users;
 
 use App\Http\Controllers\Controller;
+use App\Models\InvitationLinkShare;
 use App\Models\Partner;
 use App\Models\User;
 use App\Notifications\InvitationNotification;
@@ -179,6 +180,16 @@ class UserController extends Controller
             'roles'                => self::ROLES,
             'partners'             => Partner::where('status', 'active')->orderBy('name')->get(['id', 'name']),
             'assigned_cluster_ids' => $user->clusterApprovers->where('role', $user->role)->pluck('cluster_id')->values(),
+            'invitation_link_shares' => InvitationLinkShare::where('user_id', $user->id)
+                ->with('sharedBy:id,name')
+                ->orderByDesc('created_at')
+                ->get()
+                ->map(fn (InvitationLinkShare $s) => [
+                    'id'             => $s->id,
+                    'shared_by_name' => $s->sharedBy->name,
+                    'created_at'     => $s->created_at->toISOString(),
+                    'note'           => $s->note,
+                ]),
         ]);
     }
 

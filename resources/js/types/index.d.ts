@@ -54,6 +54,13 @@ export interface UserRecord {
   clusters?: string[];
 }
 
+export interface InvitationLinkShareRecord {
+  id: string;
+  shared_by_name: string;
+  created_at: string;
+  note: string | null;
+}
+
 export interface ClusterOption {
   id: string;
   name: string;

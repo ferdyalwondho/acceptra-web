@@ -197,6 +197,12 @@ Route::middleware('auth')->group(function () {
     Route::post('/users/{id}/resend-invitation', [UserInvitationController::class, 'resend'])
         ->name('users.resend-invitation');
 
+    // Copy link undangan langsung, bypass email (super_admin only — dicek di controller)
+    Route::post('/users/{id}/copy-invitation-link', [UserInvitationController::class, 'copyLink'])
+        ->name('users.copy-invitation-link');
+    Route::get('/users/{id}/invitation-link-shares/{shareId}/evidence', [UserInvitationController::class, 'evidence'])
+        ->name('users.invitation-link-share-evidence');
+
     // FR-USR-04: Filter user by role untuk dropdown PIC approver
     Route::get('/api/users', [UserController::class, 'filterByRole'])->name('api.users.filter');
 
@@ -221,4 +227,6 @@ Route::middleware('auth')->group(function () {
     Route::post('/profile/signature',                   [ProfileController::class, 'storeSignature'])->name('profile.signature.store');
     Route::delete('/profile/signature/{sig}',           [ProfileController::class, 'destroySignature'])->name('profile.signature.destroy');
     Route::patch('/profile/signature/{sig}/activate',   [ProfileController::class, 'activateSignature'])->name('profile.signature.activate');
+    Route::get('/profile/invitation-history', [ProfileController::class, 'invitationHistory'])->name('profile.invitation-history');
+    Route::get('/profile/invitation-history/{shareId}/evidence', [ProfileController::class, 'invitationHistoryEvidence'])->name('profile.invitation-history.evidence');
 });

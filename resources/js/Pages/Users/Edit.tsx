@@ -4,15 +4,16 @@ import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import AppShell from '@/layouts/AppShell';
 import ClusterMultiSelect from '@/components/acceptra/ClusterMultiSelect';
-import { ArrowLeft, Mail, Trash2 } from 'lucide-react';
+import { ArrowLeft, Copy, Link2, Mail, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { UserRecord, RoleOption, PartnerOption, ClusterOption, PageProps } from '@/types';
+import type { UserRecord, RoleOption, PartnerOption, ClusterOption, InvitationLinkShareRecord, PageProps } from '@/types';
 
 interface Props {
   user: UserRecord;
   roles: RoleOption[];
   partners: PartnerOption[];
   assigned_cluster_ids: string[];
+  invitation_link_shares: InvitationLinkShareRecord[];
 }
 
 const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors';
@@ -24,7 +25,7 @@ const APPROVER_ROLES = [
   'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme',
 ];
 
-export default function UserEdit({ user, roles, partners, assigned_cluster_ids }: Props) {
+export default function UserEdit({ user, roles, partners, assigned_cluster_ids, invitation_link_shares }: Props) {
   const { t } = useTranslation();
   const { flash } = usePage<PageProps>().props;
 
@@ -41,6 +42,15 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids }
   const [resendLoading, setResendLoading] = useState(false);
   const [availableClusters, setAvailableClusters] = useState<ClusterOption[]>([]);
   const [initialRole]                     = useState(user.role);
+
+  const [copyLinkOpen, setCopyLinkOpen]       = useState(false);
+  const [copyLinkAgree, setCopyLinkAgree]     = useState(false);
+  const [copyLinkEvidence, setCopyLinkEvidence] = useState<File | null>(null);
+  const [copyLinkNote, setCopyLinkNote]       = useState('');
+  const [copyLinkLoading, setCopyLinkLoading] = useState(false);
+  const [copyLinkError, setCopyLinkError]     = useState<string | null>(null);
+  const [revealedUrl, setRevealedUrl]         = useState<string | null>(null);
+  const [urlCopied, setUrlCopied]             = useState(false);
 
   const isApproverRole = APPROVER_ROLES.includes(form.data.role);
 
@@ -89,6 +99,52 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids }
   function handleDelete() {
     router.delete(`/users/${user.id}`, {
       onFinish: () => setDeleteOpen(false),
+    });
+  }
+
+  function resetCopyLinkForm() {
+    setCopyLinkAgree(false);
+    setCopyLinkEvidence(null);
+    setCopyLinkNote('');
+    setCopyLinkError(null);
+  }
+
+  function handleCopyLinkSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!copyLinkAgree || !copyLinkEvidence) return;
+
+    const formData = new FormData();
+    formData.append('agree', '1');
+    formData.append('evidence', copyLinkEvidence);
+    if (copyLinkNote) formData.append('note', copyLinkNote);
+
+    setCopyLinkLoading(true);
+    setCopyLinkError(null);
+
+    axios
+      .post<{ url: string }>(`/users/${user.id}/copy-invitation-link`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then(({ data }) => {
+        setCopyLinkOpen(false);
+        resetCopyLinkForm();
+        setRevealedUrl(data.url);
+        router.reload({ only: ['invitation_link_shares'] });
+      })
+      .catch((err) => {
+        const message = err?.response?.data?.errors
+          ? Object.values(err.response.data.errors).flat().join(' ')
+          : err?.response?.data?.message ?? t('users.copy_link_submit');
+        setCopyLinkError(String(message));
+      })
+      .finally(() => setCopyLinkLoading(false));
+  }
+
+  function handleCopyRevealedUrl() {
+    if (!revealedUrl) return;
+    navigator.clipboard.writeText(revealedUrl).then(() => {
+      setUrlCopied(true);
+      setTimeout(() => setUrlCopied(false), 2000);
     });
   }
 
@@ -242,22 +298,64 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids }
           {form.errors.status && <p className={cn(errorCls, 'mt-2')}>{form.errors.status}</p>}
         </div>
 
-        {/* Kirim Ulang Undangan */}
+        {/* Kirim Ulang Undangan + Copy Link Undangan */}
         {user.invitation_pending && (
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xs flex items-center justify-between p-4">
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xs flex flex-wrap items-center justify-between gap-3 p-4">
             <div>
               <p className="text-sm font-medium text-[var(--color-text-primary)]">{t('users.resend_invitation')}</p>
               <p className="text-xs text-[var(--color-text-secondary)]">{t('users.resend_hint')}</p>
             </div>
-            <button
-              type="button"
-              onClick={handleResend}
-              disabled={resendLoading}
-              className="flex h-9 items-center gap-2 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-60"
-            >
-              <Mail className="h-4 w-4" />
-              {resendLoading ? t('users.resend_sending') : t('users.btn_resend_short')}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={resendLoading}
+                className="flex h-9 items-center gap-2 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-60"
+              >
+                <Mail className="h-4 w-4" />
+                {resendLoading ? t('users.resend_sending') : t('users.btn_resend_short')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCopyLinkOpen(true)}
+                className="flex h-9 items-center gap-2 rounded-md border border-[var(--color-border-strong)] bg-white px-3 text-sm font-medium hover:bg-muted transition-colors"
+                title={t('users.copy_link_hint')}
+              >
+                <Link2 className="h-4 w-4" />
+                {t('users.copy_link_invitation')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* History Akses Link Undangan — tetap terlihat walau user sudah aktif */}
+        {invitation_link_shares.length > 0 && (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xs p-4">
+            <p className="mb-3 text-sm font-medium text-[var(--color-text-primary)]">{t('users.history_title')}</p>
+            <ul className="space-y-2">
+              {invitation_link_shares.map((share) => (
+                <li
+                  key={share.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs"
+                >
+                  <div>
+                    <p className="text-[var(--color-text-primary)]">
+                      {t('users.history_shared_by')} <span className="font-medium">{share.shared_by_name}</span>
+                    </p>
+                    <p className="text-[var(--color-text-secondary)]">{new Date(share.created_at).toLocaleString()}</p>
+                    {share.note && <p className="mt-0.5 text-[var(--color-text-secondary)]">{share.note}</p>}
+                  </div>
+                  <a
+                    href={`/users/${user.id}/invitation-link-shares/${share.id}/evidence`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-ming hover:underline"
+                  >
+                    {t('users.history_view_evidence')}
+                  </a>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -313,6 +411,113 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids }
                 className="flex h-9 items-center rounded-md bg-danger px-4 text-sm font-semibold text-white hover:opacity-90 transition-opacity"
               >
                 {t('users.btn_delete_confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog Copy Link Undangan — persetujuan + upload bukti */}
+      {copyLinkOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => { setCopyLinkOpen(false); resetCopyLinkForm(); }}
+          />
+          <form
+            onSubmit={handleCopyLinkSubmit}
+            className="relative z-10 w-full max-w-md rounded-xl border border-[var(--color-border)] bg-white p-6 shadow-lg"
+          >
+            <h2 className="text-base font-semibold text-[var(--color-text-primary)]">{t('users.copy_link_modal_title')}</h2>
+
+            <label className="mt-4 flex items-start gap-2 text-xs text-[var(--color-text-secondary)]">
+              <input
+                type="checkbox"
+                checked={copyLinkAgree}
+                onChange={(e) => setCopyLinkAgree(e.target.checked)}
+                className="mt-0.5 h-4 w-4 flex-shrink-0"
+              />
+              {t('users.copy_link_terms_text')}
+            </label>
+
+            <div className="mt-4">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                {t('users.copy_link_evidence_label')} <span className="text-danger">*</span>
+              </label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,application/pdf"
+                onChange={(e) => setCopyLinkEvidence(e.target.files?.[0] ?? null)}
+                className="block w-full text-xs"
+              />
+            </div>
+
+            <div className="mt-4">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                {t('users.copy_link_note_label')}
+              </label>
+              <textarea
+                value={copyLinkNote}
+                onChange={(e) => setCopyLinkNote(e.target.value)}
+                placeholder={t('users.copy_link_note_placeholder')}
+                rows={2}
+                className="w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors"
+              />
+            </div>
+
+            {copyLinkError && <p className={cn(errorCls, 'mt-3')}>{copyLinkError}</p>}
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setCopyLinkOpen(false); resetCopyLinkForm(); }}
+                className="flex h-9 items-center rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-muted transition-colors"
+              >
+                {t('users.btn_cancel')}
+              </button>
+              <button
+                type="submit"
+                disabled={!copyLinkAgree || !copyLinkEvidence || copyLinkLoading}
+                className="flex h-9 items-center rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
+              >
+                {copyLinkLoading ? t('users.copy_link_submitting') : t('users.copy_link_submit')}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Popup link undangan siap dibagikan */}
+      {revealedUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setRevealedUrl(null)} />
+          <div className="relative z-10 w-full max-w-md rounded-xl border border-[var(--color-border)] bg-white p-6 shadow-lg">
+            <h2 className="text-base font-semibold text-[var(--color-text-primary)]">{t('users.copy_link_popup_title')}</h2>
+            <p className="mt-2 text-sm text-[var(--color-text-secondary)]">{t('users.copy_link_popup_hint')}</p>
+            <div className="mt-4 flex items-center gap-2">
+              <input
+                type="text"
+                readOnly
+                value={revealedUrl}
+                className="h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-[var(--color-bg-subtle)] px-3 text-xs"
+                onFocus={(e) => e.target.select()}
+              />
+              <button
+                type="button"
+                onClick={handleCopyRevealedUrl}
+                className="flex h-9 flex-shrink-0 items-center gap-1.5 rounded-md bg-brand-ink px-3 text-sm font-medium text-white transition-opacity"
+              >
+                <Copy className="h-4 w-4" />
+                {urlCopied ? t('users.copy_link_copied') : t('users.copy_link_copy_button')}
+              </button>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRevealedUrl(null)}
+                className="flex h-9 items-center rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-muted transition-colors"
+              >
+                {t('users.copy_link_close')}
               </button>
             </div>
           </div>
