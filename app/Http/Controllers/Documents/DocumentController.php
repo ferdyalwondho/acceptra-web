@@ -249,8 +249,14 @@ class DocumentController extends Controller
             'audit_logs'  => $auditLogs,
             'initial_tab' => $request->query('tab', 'overview'),
             // For the Edit Info modal's Partner dropdown — only admins can edit metadata.
+            // Includes the document's current partner even if it's since been deactivated,
+            // otherwise the dropdown can't resolve a label for the pre-selected value and
+            // renders blank (SearchableSelect only shows a label for options it's given).
             'partners' => in_array($user->role, self::ADMIN_ROLES)
-                ? Partner::where('status', 'active')->orderBy('name')->get(['id', 'name'])
+                ? Partner::where('status', 'active')
+                    ->orWhere('id', $document->partner_id)
+                    ->orderBy('name')
+                    ->get(['id', 'name'])
                 : [],
         ]);
     }
@@ -465,7 +471,10 @@ class DocumentController extends Controller
         ];
 
         if ($isAdmin) {
+            // Includes the document's current partner even if it's since been deactivated —
+            // otherwise the dropdown can't resolve a label for the pre-selected value.
             $props['partners'] = Partner::where('status', 'active')
+                ->orWhere('id', $document->partner_id)
                 ->orderBy('name')
                 ->get(['id', 'name']);
         }
