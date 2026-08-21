@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
+import axios from 'axios';
 import AppShell from '@/layouts/AppShell';
 import { cn } from '@/lib/utils';
-import { Globe, KeyRound, User } from 'lucide-react';
-import type { PageProps } from '@/types';
+import { Globe, KeyRound, ShieldCheck, User } from 'lucide-react';
+import type { InvitationLinkShareRecord, PageProps } from '@/types';
 
 const inputCls = 'h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors';
 
@@ -16,6 +17,14 @@ export default function ProfileEdit() {
 
   const [lang, setLang] = useState<'id' | 'en'>(user?.preferred_language ?? 'id');
   const [changePass, setChangePass] = useState(false);
+  const [invitationHistory, setInvitationHistory] = useState<InvitationLinkShareRecord[]>([]);
+
+  useEffect(() => {
+    axios
+      .get<{ data: InvitationLinkShareRecord[] }>('/profile/invitation-history')
+      .then(({ data }) => setInvitationHistory(data.data))
+      .catch(() => setInvitationHistory([]));
+  }, []);
 
   function handleLangChange(l: 'id' | 'en') {
     setLang(l);
@@ -137,6 +146,41 @@ export default function ProfileEdit() {
             </div>
             <span className="text-xs font-medium text-ming">{t('profile.manage')}</span>
           </Link>
+        )}
+
+        {/* Riwayat Akses Link Undangan — hanya muncul jika pernah dibagikan langsung */}
+        {invitationHistory.length > 0 && (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-xs p-6">
+            <div className="mb-1 flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-[var(--color-text-secondary)]" />
+              <h2 className="font-semibold text-[var(--color-text-primary)]">{t('profile.invitation_history_title')}</h2>
+            </div>
+            <p className="mb-4 text-xs text-[var(--color-text-secondary)]">{t('profile.invitation_history_hint')}</p>
+            <ul className="space-y-2">
+              {invitationHistory.map((share) => (
+                <li
+                  key={share.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs"
+                >
+                  <div>
+                    <p className="text-[var(--color-text-primary)]">
+                      {t('profile.invitation_history_shared_by')} <span className="font-medium">{share.shared_by_name}</span>
+                    </p>
+                    <p className="text-[var(--color-text-secondary)]">{new Date(share.created_at).toLocaleString()}</p>
+                    {share.note && <p className="mt-0.5 text-[var(--color-text-secondary)]">{share.note}</p>}
+                  </div>
+                  <a
+                    href={`/profile/invitation-history/${share.id}/evidence`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-ming hover:underline"
+                  >
+                    {t('profile.invitation_history_view_evidence')}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {/* Actions */}
