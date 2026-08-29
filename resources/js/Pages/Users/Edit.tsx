@@ -55,6 +55,11 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids, 
   const isApproverRole = APPROVER_ROLES.includes(form.data.role);
 
   useEffect(() => {
+    // Role bukan lagi partner — partner_id lama tidak relevan dan jangan ikut terkirim.
+    if (form.data.role !== 'partner') {
+      form.setData('partner_id', '');
+    }
+
     if (!isApproverRole) {
       setAvailableClusters([]);
       return;
@@ -151,6 +156,14 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids, 
   const isPartnerRole = form.data.role === 'partner';
   const isActive      = form.data.status === 'active';
 
+  // Field-field yang sudah punya penampil error sendiri di form (dan sedang terlihat).
+  // Error lain di luar daftar ini (mis. partner_id/cluster_ids yang errornya nyangkut
+  // padahal field-nya sedang disembunyikan karena role berubah) tetap harus terlihat,
+  // jadi ditampung di banner generik di bawah — biar submit yang gagal validasi tidak
+  // pernah terasa "diam saja" ke superadmin.
+  const visibleErrorKeys = ['name', 'role', 'status', ...(isPartnerRole ? ['partner_id'] : [])];
+  const hiddenErrors = Object.entries(form.errors).filter(([key]) => !visibleErrorKeys.includes(key));
+
   return (
     <AppShell>
       <Head title={`${t('users.edit_title')} – ${user.name}`} />
@@ -165,6 +178,12 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids, 
           )}
         >
           {flashMsg.text}
+        </div>
+      )}
+
+      {hiddenErrors.length > 0 && (
+        <div className="mb-4 rounded-lg bg-danger-surface px-4 py-3 text-sm font-medium text-danger">
+          {hiddenErrors.map(([key, message]) => <p key={key}>{message}</p>)}
         </div>
       )}
 
