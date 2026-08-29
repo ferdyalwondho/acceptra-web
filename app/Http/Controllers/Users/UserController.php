@@ -119,6 +119,10 @@ class UserController extends Controller
         // same lowercase form the User::email() mutator stores (see FR-AUTH email case fix).
         $request->merge(['email' => mb_strtolower(trim((string) $request->input('email')))]);
 
+        if ($request->input('role') !== 'partner') {
+            $request->merge(['partner_id' => null]);
+        }
+
         $validated = $request->validate([
             'name'          => ['required', 'string', 'max:150'],
             'email'         => ['required', 'email', 'unique:users,email'],
@@ -199,6 +203,10 @@ class UserController extends Controller
         abort_if($request->user()->role !== 'super_admin', 403);
 
         $user = User::findOrFail($id);
+
+        if ($request->input('role') !== 'partner') {
+            $request->merge(['partner_id' => null]);
+        }
 
         $validated = $request->validate([
             'name'          => ['required', 'string', 'max:150'],

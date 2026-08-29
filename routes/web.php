@@ -18,6 +18,7 @@ use App\Http\Controllers\Templates\TemplateController;
 use App\Http\Controllers\Settings\ReminderSettingController;
 use App\Http\Controllers\Users\UserController;
 use App\Http\Controllers\Users\UserInvitationController;
+use App\Http\Controllers\Users\UserPasswordResetController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\HelpController;
 use Illuminate\Support\Facades\Route;
@@ -202,6 +203,12 @@ Route::middleware('auth')->group(function () {
         ->name('users.copy-invitation-link');
     Route::get('/users/{id}/invitation-link-shares/{shareId}/evidence', [UserInvitationController::class, 'evidence'])
         ->name('users.invitation-link-share-evidence');
+
+    // Bagikan link reset password langsung, bypass email (super_admin only — dicek di controller)
+    Route::post('/users/{id}/reset-password-link', [UserPasswordResetController::class, 'copyLink'])
+        ->name('users.reset-password-link');
+    Route::get('/users/{id}/password-reset-link-shares/{shareId}/evidence', [UserPasswordResetController::class, 'evidence'])
+        ->name('users.password-reset-link-share-evidence');
 
     // FR-USR-04: Filter user by role untuk dropdown PIC approver
     Route::get('/api/users', [UserController::class, 'filterByRole'])->name('api.users.filter');

@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import { useTranslation } from 'react-i18next';
+import axios from 'axios';
 import AppShell from '@/layouts/AppShell';
-import { Plus, Edit, Search, Trash2, Mail, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import { Plus, Edit, Search, Trash2, Mail, KeyRound, Copy, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { UserRecord, PaginatedResponse, PageProps } from '@/types';
+
+const errorCls = 'mt-1 text-xs text-danger';
 
 const ROLE_COLOR: Record<string, string> = {
   super_admin:            'bg-brand-surface   text-brand-ink',
@@ -34,6 +37,15 @@ export default function UsersIndex({ users, roles, filters }: Props) {
   const [statusFilter, setStatusFilter] = useState(filters.status ?? '');
   const [deleteTarget, setDeleteTarget] = useState<UserRecord | null>(null);
   const [flashMsg, setFlashMsg]         = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const [resetPwTarget, setResetPwTarget]     = useState<UserRecord | null>(null);
+  const [resetPwAgree, setResetPwAgree]       = useState(false);
+  const [resetPwEvidence, setResetPwEvidence] = useState<File | null>(null);
+  const [resetPwNote, setResetPwNote]         = useState('');
+  const [resetPwLoading, setResetPwLoading]   = useState(false);
+  const [resetPwError, setResetPwError]       = useState<string | null>(null);
+  const [revealedPwUrl, setRevealedPwUrl]     = useState<string | null>(null);
+  const [pwUrlCopied, setPwUrlCopied]         = useState(false);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -90,6 +102,51 @@ export default function UsersIndex({ users, roles, filters }: Props) {
     if (!deleteTarget) return;
     router.delete(`/users/${deleteTarget.id}`, {
       onFinish: () => setDeleteTarget(null),
+    });
+  }
+
+  function resetResetPwForm() {
+    setResetPwAgree(false);
+    setResetPwEvidence(null);
+    setResetPwNote('');
+    setResetPwError(null);
+  }
+
+  function handleResetPwSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!resetPwTarget || !resetPwAgree || !resetPwEvidence) return;
+
+    const formData = new FormData();
+    formData.append('agree', '1');
+    formData.append('evidence', resetPwEvidence);
+    if (resetPwNote) formData.append('note', resetPwNote);
+
+    setResetPwLoading(true);
+    setResetPwError(null);
+
+    axios
+      .post<{ url: string }>(`/users/${resetPwTarget.id}/reset-password-link`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then(({ data }) => {
+        setResetPwTarget(null);
+        resetResetPwForm();
+        setRevealedPwUrl(data.url);
+      })
+      .catch((err) => {
+        const message = err?.response?.data?.errors
+          ? Object.values(err.response.data.errors).flat().join(' ')
+          : err?.response?.data?.message ?? t('users.reset_pw_submit');
+        setResetPwError(String(message));
+      })
+      .finally(() => setResetPwLoading(false));
+  }
+
+  function handleCopyResetPwUrl() {
+    if (!revealedPwUrl) return;
+    navigator.clipboard.writeText(revealedPwUrl).then(() => {
+      setPwUrlCopied(true);
+      setTimeout(() => setPwUrlCopied(false), 2000);
     });
   }
 
@@ -280,6 +337,12 @@ export default function UsersIndex({ users, roles, filters }: Props) {
                             <Edit className="h-3.5 w-3.5" /> Edit
                           </Link>
                           <button
+                            onClick={() => setResetPwTarget(u)}
+                            className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)] hover:text-ming transition-colors"
+                          >
+                            <KeyRound className="h-3.5 w-3.5" /> {t('users.reset_password_btn')}
+                          </button>
+                          <button
                             onClick={() => handleDelete(u)}
                             className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-tertiary)] hover:text-danger transition-colors"
                           >
@@ -341,6 +404,12 @@ export default function UsersIndex({ users, roles, filters }: Props) {
                   >
                     <Edit className="h-3.5 w-3.5" /> Edit
                   </Link>
+                  <button
+                    onClick={() => setResetPwTarget(u)}
+                    className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)] hover:text-ming transition-colors"
+                  >
+                    <KeyRound className="h-3.5 w-3.5" /> {t('users.reset_password_btn')}
+                  </button>
                   <button
                     onClick={() => handleDelete(u)}
                     className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-tertiary)] hover:text-danger transition-colors"
@@ -404,6 +473,115 @@ export default function UsersIndex({ users, roles, filters }: Props) {
                 className="flex h-9 items-center rounded-md bg-danger px-4 text-sm font-semibold text-white hover:opacity-90 transition-opacity"
               >
                 {t('users.btn_delete_confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog Reset Password — persetujuan + upload bukti */}
+      {resetPwTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => { setResetPwTarget(null); resetResetPwForm(); }}
+          />
+          <form
+            onSubmit={handleResetPwSubmit}
+            className="relative z-10 w-full max-w-md rounded-xl border border-[var(--color-border)] bg-white p-6 shadow-lg"
+          >
+            <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
+              {t('users.reset_pw_modal_title', { name: resetPwTarget.name })}
+            </h2>
+
+            <label className="mt-4 flex items-start gap-2 text-xs text-[var(--color-text-secondary)]">
+              <input
+                type="checkbox"
+                checked={resetPwAgree}
+                onChange={(e) => setResetPwAgree(e.target.checked)}
+                className="mt-0.5 h-4 w-4 flex-shrink-0"
+              />
+              {t('users.reset_pw_terms_text')}
+            </label>
+
+            <div className="mt-4">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                {t('users.reset_pw_evidence_label')} <span className="text-danger">*</span>
+              </label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,application/pdf"
+                onChange={(e) => setResetPwEvidence(e.target.files?.[0] ?? null)}
+                className="block w-full text-xs"
+              />
+            </div>
+
+            <div className="mt-4">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
+                {t('users.reset_pw_note_label')}
+              </label>
+              <textarea
+                value={resetPwNote}
+                onChange={(e) => setResetPwNote(e.target.value)}
+                placeholder={t('users.reset_pw_note_placeholder')}
+                rows={2}
+                className="w-full rounded-sm border border-[var(--color-border-strong)] bg-white px-3 py-2 text-sm placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-[3px] focus:ring-ring/40 transition-colors"
+              />
+            </div>
+
+            {resetPwError && <p className={cn(errorCls, 'mt-3')}>{resetPwError}</p>}
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setResetPwTarget(null); resetResetPwForm(); }}
+                className="flex h-9 items-center rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-muted transition-colors"
+              >
+                {t('users.btn_cancel')}
+              </button>
+              <button
+                type="submit"
+                disabled={!resetPwAgree || !resetPwEvidence || resetPwLoading}
+                className="flex h-9 items-center rounded-md bg-brand-ink px-4 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
+              >
+                {resetPwLoading ? t('users.reset_pw_submitting') : t('users.reset_pw_submit')}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Popup link reset password siap dibagikan */}
+      {revealedPwUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setRevealedPwUrl(null)} />
+          <div className="relative z-10 w-full max-w-md rounded-xl border border-[var(--color-border)] bg-white p-6 shadow-lg">
+            <h2 className="text-base font-semibold text-[var(--color-text-primary)]">{t('users.reset_pw_popup_title')}</h2>
+            <p className="mt-2 text-sm text-[var(--color-text-secondary)]">{t('users.reset_pw_popup_hint')}</p>
+            <div className="mt-4 flex items-center gap-2">
+              <input
+                type="text"
+                readOnly
+                value={revealedPwUrl}
+                className="h-9 w-full rounded-sm border border-[var(--color-border-strong)] bg-[var(--color-bg-subtle)] px-3 text-xs"
+                onFocus={(e) => e.target.select()}
+              />
+              <button
+                type="button"
+                onClick={handleCopyResetPwUrl}
+                className="flex h-9 flex-shrink-0 items-center gap-1.5 rounded-md bg-brand-ink px-3 text-sm font-medium text-white transition-opacity"
+              >
+                <Copy className="h-4 w-4" />
+                {pwUrlCopied ? t('users.reset_pw_copied') : t('users.reset_pw_copy_button')}
+              </button>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRevealedPwUrl(null)}
+                className="flex h-9 items-center rounded-md border border-[var(--color-border-strong)] px-4 text-sm font-medium hover:bg-muted transition-colors"
+              >
+                {t('users.reset_pw_close')}
               </button>
             </div>
           </div>
