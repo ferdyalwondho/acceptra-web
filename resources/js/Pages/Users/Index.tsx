@@ -5,6 +5,7 @@ import axios from 'axios';
 import AppShell from '@/layouts/AppShell';
 import { Plus, Edit, Search, Trash2, Mail, KeyRound, Copy, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import ExportExcelButton from '@/components/acceptra/ExportExcelButton';
 import type { UserRecord, PaginatedResponse, PageProps } from '@/types';
 
 const errorCls = 'mt-1 text-xs text-danger';
@@ -80,6 +81,15 @@ export default function UsersIndex({ users, roles, filters }: Props) {
   function handleStatusChange(value: string) {
     setStatusFilter(value);
     applyFilters({ search, role: roleFilter, status: value });
+  }
+
+  function buildExportUrl(): string {
+    const params = new URLSearchParams();
+    if (search)       params.set('search', search);
+    if (roleFilter)   params.set('role', roleFilter);
+    if (statusFilter) params.set('status', statusFilter);
+    const qs = params.toString();
+    return `/users/export${qs ? '?' + qs : ''}`;
   }
 
   function handleSortChange(column: string) {
@@ -219,12 +229,15 @@ export default function UsersIndex({ users, roles, filters }: Props) {
             {t('users.subtitle')}
           </p>
         </div>
-        <Link
-          href="/users/create"
-          className="self-start flex h-9 items-center gap-2 rounded-md px-4 text-sm font-semibold text-white bg-brand-ink transition-all focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
-        >
-          <Plus className="h-4 w-4" /> {t('users.add_user')}
-        </Link>
+        <div className="flex items-center gap-2 self-start">
+          <ExportExcelButton href={buildExportUrl()} label={t('users.export_pending')} />
+          <Link
+            href="/users/create"
+            className="flex h-9 items-center gap-2 rounded-md px-4 text-sm font-semibold text-white bg-brand-ink transition-all focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+          >
+            <Plus className="h-4 w-4" /> {t('users.add_user')}
+          </Link>
+        </div>
       </div>
 
       {/* Filter */}

@@ -6,6 +6,9 @@ RUN apk add --no-cache \
     ghostscript \
     qpdf \
     libpng-dev \
+    libjpeg-turbo-dev \
+    freetype-dev \
+    libwebp-dev \
     libzip-dev \
     oniguruma-dev \
     postgresql-dev \
@@ -17,6 +20,7 @@ RUN apk add --no-cache \
     npm
 
 RUN docker-php-ext-configure intl \
+ && docker-php-ext-configure gd --with-jpeg --with-freetype --with-webp \
  && docker-php-ext-install \
     pdo \
     pdo_pgsql \

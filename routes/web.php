@@ -17,6 +17,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\Templates\TemplateController;
 use App\Http\Controllers\Settings\ReminderSettingController;
 use App\Http\Controllers\Users\UserController;
+use App\Http\Controllers\Users\UserExportController;
 use App\Http\Controllers\Users\UserInvitationController;
 use App\Http\Controllers\Users\UserPasswordResetController;
 use App\Http\Controllers\DashboardController;
@@ -188,6 +189,7 @@ Route::middleware('auth')->group(function () {
 
     /* ── Users (FR-USR) ── */
     Route::get('/users',            [UserController::class, 'index'])->name('users.index');
+    Route::get('/users/export',     UserExportController::class)->name('users.export');
     Route::get('/users/create',     [UserController::class, 'create'])->name('users.create');
     Route::post('/users',           [UserController::class, 'store'])->name('users.store');
     Route::get('/users/{id}/edit',  [UserController::class, 'edit'])->name('users.edit');

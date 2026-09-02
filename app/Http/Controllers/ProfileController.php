@@ -73,16 +73,30 @@ class ProfileController extends Controller
 
         $userId    = $request->user()->id;
         $fileToken = (string) Str::uuid7();
-        // Always re-encoded and stored as PNG — normalize() strips encodings
-        // (e.g. interlaced PNG) FPDF's stamper can't read.
-        $path      = "signatures/{$userId}/{$fileToken}.png";
 
-        Storage::put($path, SignatureImage::normalize($decoded));
+        // Re-encode to a clean baseline PNG where GD can decode it; otherwise keep
+        // the original bytes but store them under an extension that matches the
+        // real content, so the PDF stamper never gets a JPEG named ".png".
+        try {
+            ['bytes' => $bytes, 'ext' => $ext] = SignatureImage::normalizeWithExtension($decoded);
+        } catch (\InvalidArgumentException) {
+            abort(422, 'Format tanda tangan tidak didukung.');
+        }
+
+        $path = "signatures/{$userId}/{$fileToken}.{$ext}";
+        Storage::put($path, $bytes);
 
         DB::transaction(function () use ($userId, $path) {
             Signature::where('user_id', $userId)->update(['is_active' => false]);
             Signature::create(['user_id' => $userId, 'image_path' => $path, 'is_active' => true]);
         });
+
+        // Drop cached signed PDFs of documents this user has already signed so they
+        // regenerate: an approval step keeps pointing at the signature it was
+        // snapshotted with, but that file may have been broken when the PDF was
+        // first built (e.g. JPEG bytes under a .png name) — regeneration now picks
+        // it up correctly via PdfSignatureService's content-based type detection.
+        Signature::invalidateFinalPdfsForUser($userId);
 
         return redirect()->back()->with('success', 'Tanda tangan disimpan.');
     }
@@ -93,6 +107,11 @@ class ProfileController extends Controller
         $sig = Signature::where('id', $sigId)
             ->where('user_id', $request->user()->id)
             ->firstOrFail();
+
+        // Bust cached PDFs while the row still exists — deleting it nulls the
+        // referencing approval_steps.signature_id (nullOnDelete), after which the
+        // affected documents can no longer be found by user id.
+        Signature::invalidateFinalPdfsForUser($sig->user_id);
 
         Storage::delete($sig->image_path);
         $sig->delete();

@@ -13,7 +13,7 @@ class DocumentExcelExport
     private const HEADINGS = [
         'Unique ID', 'Project Code', 'Link ID', 'SOW', 'Partner',
         'Submitted At', 'Status Overall',
-        'L1 Status', 'L1 Approver', 'L1 Date',
+        'L1 Status', 'L1 Approver', 'L1 Date', 'L1 Notes',
         'L2 Status', 'L2 Approver', 'L2 Date', 'L2 Notes',
         'L3 Status', 'L3 Approver', 'L3 Date', 'L3 Notes',
         'L4 Status', 'L4 Approver', 'L4 Date', 'L4 Notes',
@@ -37,10 +37,10 @@ class DocumentExcelExport
             'font'    => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
             'fill'    => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E3A5F']],
         ];
-        $sheet->getStyle('A1:V1')->applyFromArray($headerStyle);
+        $sheet->getStyle('A1:W1')->applyFromArray($headerStyle);
 
         // Auto-width for all columns
-        foreach (range('A', 'V') as $col) {
+        foreach (range('A', 'W') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
 
@@ -62,14 +62,8 @@ class DocumentExcelExport
                         $doc->status_code,
                     ];
 
-                    // L1 — no Notes column
-                    $l1 = $steps->get(1);
-                    $row[] = $l1?->status;
-                    $row[] = $l1?->approver?->name ?? $l1?->offline_approver_name;
-                    $row[] = $l1?->action_at?->format('d M Y') ?? $l1?->offline_date?->format('d M Y');
-
-                    // L2–L4 — includes Notes column
-                    foreach ([2, 3, 4] as $level) {
+                    // L1–L4 — Status / Approver / Date / Notes per level
+                    foreach ([1, 2, 3, 4] as $level) {
                         $step   = $steps->get($level);
                         $row[] = $step?->status;
                         $row[] = $step?->approver?->name ?? $step?->offline_approver_name;

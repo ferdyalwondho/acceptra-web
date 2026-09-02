@@ -29,6 +29,7 @@
     "title": "User Management",
     "subtitle": "Kelola user dan kirim undangan approver.",
     "add_user": "Tambah User",
+    "export_pending": "Export user belum aktivasi",
     "search_placeholder": "Cari nama atau email…",
     "filter_all_roles": "Semua role",
     "filter_all_statuses": "Semua status",

@@ -29,6 +29,7 @@
     "title": "User Management",
     "subtitle": "Manage users and send approver invitations.",
     "add_user": "Add User",
+    "export_pending": "Export pending users",
     "search_placeholder": "Search by name or email…",
     "filter_all_roles": "All roles",
     "filter_all_statuses": "All statuses",

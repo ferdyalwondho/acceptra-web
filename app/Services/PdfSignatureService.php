@@ -378,17 +378,34 @@ class PdfSignatureService
                 }
 
                 if ($box['kind'] === 'sig') {
-                    $sig     = $box['sig'];
-                    $ext     = strtolower(pathinfo($sig->image_path, PATHINFO_EXTENSION));
-                    $sigTemp = tempnam(sys_get_temp_dir(), 'acc_sig_');
-                    file_put_contents($sigTemp, Storage::get($sig->image_path));
-                    $tempSigFiles[] = $sigTemp;
+                    $sig   = $box['sig'];
+                    $bytes = Storage::get($sig->image_path);
 
-                    $imgType = match ($ext) {
-                        'jpg', 'jpeg' => 'JPEG',
-                        'gif'         => 'GIF',
-                        default       => 'PNG',
+                    // Detect the real format from the file's magic bytes, never the
+                    // stored extension: some legacy signatures are JPEG bytes saved
+                    // under a ".png" name (GD built without JPEG support silently
+                    // passed them through SignatureImage::normalize()), and handing
+                    // FPDF the wrong type throws "Not a PNG file" — which the catch
+                    // below then swallows, dropping the signature with no trace.
+                    $imgType = match (true) {
+                        str_starts_with($bytes, "\x89PNG")     => 'PNG',
+                        str_starts_with($bytes, "\xFF\xD8\xFF") => 'JPEG',
+                        str_starts_with($bytes, 'GIF8')         => 'GIF',
+                        default                                 => null,
                     };
+
+                    if ($imgType === null) {
+                        Log::warning('PdfSignatureService: unrecognised signature image format, skipping box', [
+                            'document_id'  => $document->id,
+                            'signature_id' => $sig->id,
+                            'image_path'   => $sig->image_path,
+                        ]);
+                        continue;
+                    }
+
+                    $sigTemp = tempnam(sys_get_temp_dir(), 'acc_sig_');
+                    file_put_contents($sigTemp, $bytes);
+                    $tempSigFiles[] = $sigTemp;
 
                     // A single malformed/legacy-encoded signature (e.g. an interlaced
                     // PNG predating SignatureImage::normalize()) must not blank out the
