@@ -10,11 +10,14 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class DocumentExportController extends Controller
 {
-    private const AVIAT_ROLES = ['admin', 'super_admin', 'viewer'];
+    // Aviat internal roles see everything; a partner may export too, but
+    // DocumentQueryService::build() already scopes their rows to
+    // submitted_by = user.id OR partner_id = user.partner_id.
+    private const EXPORT_ROLES = ['admin', 'super_admin', 'viewer', 'partner'];
 
     public function __invoke(Request $request): StreamedResponse
     {
-        abort_if(! in_array($request->user()->role, self::AVIAT_ROLES), 403);
+        abort_if(! in_array($request->user()->role, self::EXPORT_ROLES), 403);
 
         $query    = (new DocumentQueryService)->build($request, $request->user());
         $filename = 'documents_export_' . now()->format('Ymd_His') . '.xlsx';

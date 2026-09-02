@@ -19,7 +19,8 @@ use Inertia\Response;
 
 class UserController extends Controller
 {
-    private const ROLES = [
+    // Public so the users export / import can map role values to the same labels.
+    public const ROLES = [
         ['value' => 'super_admin',           'label' => 'Super Admin'],
         ['value' => 'admin',                 'label' => 'Admin'],
         ['value' => 'viewer',                'label' => 'Viewer'],

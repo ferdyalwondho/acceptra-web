@@ -359,11 +359,18 @@ class ApprovalController extends Controller
                 if (str_starts_with($dataUrl, 'data:image/')) {
                     $decoded = base64_decode(substr($dataUrl, strpos($dataUrl, ',') + 1), strict: true);
                     if ($decoded !== false) {
-                        // Always re-encoded and stored as PNG — normalize() strips
-                        // encodings (e.g. interlaced PNG) FPDF's stamper can't read.
+                        // Re-encode to a clean baseline PNG where GD can decode it;
+                        // otherwise keep the original bytes but under an extension
+                        // matching the real content, so the stamper never gets a
+                        // JPEG named ".png" (which FPDF rejects mid-overlay).
+                        try {
+                            ['bytes' => $bytes, 'ext' => $ext] = SignatureImage::normalizeWithExtension($decoded);
+                        } catch (\InvalidArgumentException) {
+                            abort(422, 'Format tanda tangan tidak didukung.');
+                        }
                         $fileToken = (string) Str::uuid7();
-                        $path      = "signatures/{$user->id}/{$fileToken}.png";
-                        Storage::put($path, SignatureImage::normalize($decoded));
+                        $path      = "signatures/{$user->id}/{$fileToken}.{$ext}";
+                        Storage::put($path, $bytes);
                         Signature::where('user_id', $user->id)->update(['is_active' => false]);
                         $sig         = Signature::create(['user_id' => $user->id, 'image_path' => $path, 'is_active' => true]);
                         $signatureId = $sig->id;

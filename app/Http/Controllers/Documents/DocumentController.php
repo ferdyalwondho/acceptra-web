@@ -94,7 +94,7 @@ class DocumentController extends Controller
             'partners'   => in_array($user->role, self::AVIAT_ROLES)
                 ? Partner::where('status', 'active')->orderBy('name')->get(['id', 'name'])
                 : [],
-            'can_export' => in_array($user->role, self::AVIAT_ROLES),
+            'can_export' => in_array($user->role, self::AVIAT_ROLES) || $user->role === 'partner',
         ]);
     }
 

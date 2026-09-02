@@ -19,23 +19,63 @@ class SignatureImage
      */
     public static function normalize(string $decodedBytes): string
     {
-        $image = @imagecreatefromstring($decodedBytes);
-        if ($image === false) {
+        try {
+            return self::normalizeWithExtension($decodedBytes)['bytes'];
+        } catch (\InvalidArgumentException) {
             return $decodedBytes;
         }
+    }
 
-        try {
-            imagealphablending($image, false);
-            imagesavealpha($image, true);
-            imageinterlace($image, 0);
+    /**
+     * Like normalize(), but also returns the file extension the bytes should be
+     * stored under, so a caller never saves (say) JPEG bytes to a ".png" path.
+     *
+     * - GD can decode it        → re-encoded baseline PNG, ext "png".
+     * - GD can't decode it, but
+     *   it's a recognisable image → original bytes kept, ext matched to the
+     *                               real content ("png" / "jpg" / "gif") so the
+     *                               PDF stamper can still pick the right type.
+     * - Otherwise                → InvalidArgumentException; the caller should
+     *                               surface a 422 rather than store garbage.
+     *
+     * @return array{bytes: string, ext: string}
+     */
+    public static function normalizeWithExtension(string $decodedBytes): array
+    {
+        $image = @imagecreatefromstring($decodedBytes);
 
-            ob_start();
-            imagepng($image);
-            $png = ob_get_clean();
+        if ($image !== false) {
+            try {
+                imagealphablending($image, false);
+                imagesavealpha($image, true);
+                imageinterlace($image, 0);
 
-            return $png !== false && $png !== '' ? $png : $decodedBytes;
-        } finally {
-            imagedestroy($image);
+                ob_start();
+                imagepng($image);
+                $png = ob_get_clean();
+            } finally {
+                imagedestroy($image);
+            }
+
+            if ($png !== false && $png !== '') {
+                return ['bytes' => $png, 'ext' => 'png'];
+            }
         }
+
+        // GD couldn't decode/re-encode — keep the original bytes, but pin the
+        // extension to whatever the content actually is.
+        $info = @getimagesizefromstring($decodedBytes);
+        $ext  = match ($info['mime'] ?? null) {
+            'image/png'  => 'png',
+            'image/jpeg' => 'jpg',
+            'image/gif'  => 'gif',
+            default      => null,
+        };
+
+        if ($ext === null) {
+            throw new \InvalidArgumentException('Unsupported signature image format.');
+        }
+
+        return ['bytes' => $decodedBytes, 'ext' => $ext];
     }
 }
