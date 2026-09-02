@@ -326,6 +326,26 @@ class PdfSignatureService
                 $w = $pos['width']  / self::SAVE_SCALE;
                 $h = $pos['height'] / self::SAVE_SCALE;
 
+                // Guard against corrupt placement data: a box that isn't a positive,
+                // finite size that fits on the page (seen once from a bad drag/resize
+                // in the placement editor: width ~155779) would otherwise stretch its
+                // signature/text across the whole page. Skip it entirely — neither
+                // masked nor drawn — so an admin can re-place it.
+                if (! is_finite($x) || ! is_finite($y) || ! is_finite($w) || ! is_finite($h)
+                    || $w <= 0 || $h <= 0 || $w > $pageWidth || $h > $pageHeight) {
+                    Log::warning('PdfSignatureService: skipping out-of-range placement box', [
+                        'document_id' => $document->id,
+                        'key'         => $key,
+                        'x'           => $x,
+                        'y'           => $y,
+                        'w'           => $w,
+                        'h'           => $h,
+                        'page_w'      => $pageWidth,
+                        'page_h'      => $pageHeight,
+                    ]);
+                    continue;
+                }
+
                 // Key format: "{level_order}_sig" / "{level_order}_name", or
                 // "doc_{type}" for document-level fields (not tied to a level).
                 [$levelStr, $type] = explode('_', $key, 2);
