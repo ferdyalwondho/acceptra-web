@@ -110,7 +110,8 @@
     "create_success": "User berhasil dibuat dan undangan telah dikirim.",
     "update_success": "User berhasil diperbarui.",
     "delete_success": "User berhasil dihapus.",
-    "resend_success": "Undangan berhasil dikirim ulang."
+    "resend_success": "Undangan berhasil dikirim ulang.",
+    "export_pending_filtered": "Export user belum aktivasi (sesuai filter)"
   },
   "notifications": {
     "title": "Notifikasi",
@@ -182,7 +183,18 @@
     "history_col_date": "Tanggal",
     "action_approved": "Approved",
     "action_punchlist": "Approved w/ Punchlist",
-    "action_rejected": "Rejected"
+    "action_rejected": "Rejected",
+    "search_placeholder": "Cari Unique ID, Link ID, atau Project Code…",
+    "filter_all_status": "Semua status",
+    "filter_all_partners": "Semua partner",
+    "sort_newest": "Terbaru",
+    "sort_oldest": "Terlama",
+    "filter_urgent": "Mendesak ({{n}})",
+    "btn_clear": "Clear",
+    "empty_filter_title": "Tidak ada dokumen sesuai filter.",
+    "empty_filter_body": "Coba ubah atau hapus filter yang aktif.",
+    "pagination_summary": "{{from}}–{{to}} dari {{total}} dokumen",
+    "card_waiting_days": "Menunggu {{n}} hari"
   },
   "signature": {
     "page_title": "Saved Signature — Acceptra",
@@ -403,7 +415,8 @@
         "signature_replaced": "Tanda Tangan Diganti"
       },
       "routing_panel_pic_auto_notice": "Approver L2-L4 sudah otomatis ter-assign dari mapping cluster — tinggal lengkapi penempatan tanda tangan di bawah ini."
-    }
+    },
+    "btn_export_all": "Export semua dokumen saya"
   },
   "partners": {
     "page_title": "Partners — Acceptra",

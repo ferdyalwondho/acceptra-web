@@ -1,4 +1,6 @@
 import { Link } from '@inertiajs/react';
+import { useTranslation } from 'react-i18next';
+import { Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import StatusBadge from './StatusBadge';
 
@@ -13,7 +15,11 @@ export interface DocumentCardData {
   submittedAt: string;
   approvers?: { name: string; initials: string }[];
   needsRouting?: boolean;
+  /** Days the active step has been pending. Only the approval queue supplies this. */
+  waitingDays?: number | null;
 }
+
+const URGENT_AFTER_DAYS = 7;
 
 interface Props {
   doc: DocumentCardData;
@@ -22,6 +28,8 @@ interface Props {
 }
 
 export default function DocumentCard({ doc, href, className }: Props) {
+  const { t } = useTranslation();
+
   return (
     <Link
       href={href}
@@ -53,6 +61,11 @@ export default function DocumentCard({ doc, href, className }: Props) {
         {doc.partner && (
           <span className="text-[11px] text-[var(--color-text-secondary)] truncate">
             {doc.partner}
+          </span>
+        )}
+        {typeof doc.waitingDays === 'number' && doc.waitingDays >= URGENT_AFTER_DAYS && (
+          <span className="inline-flex items-center gap-1 rounded-sm bg-warning-surface px-2 py-0.5 text-[11px] font-semibold text-warning">
+            <Clock className="h-3 w-3" /> {t('approvals.card_waiting_days', { n: doc.waitingDays })}
           </span>
         )}
       </div>

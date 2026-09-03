@@ -28,6 +28,7 @@ export default function DocumentsIndex({ documents, filters, partners, can_expor
 
   const canSubmit = ['partner', 'admin', 'super_admin'].includes(role);
   const canSubmitOngoing = ['admin', 'super_admin'].includes(role);
+  const isPartner = role === 'partner';
 
   const [search, setSearch]     = useState(filters.search ?? '');
   const [statusCode, setStatus] = useState(filters.status_code ?? '');
@@ -103,6 +104,10 @@ export default function DocumentsIndex({ documents, filters, partners, can_expor
   }
 
   function buildExportUrl(): string {
+    // The backend ignores a partner's filters on export, so don't send them — the URL
+    // should say what the download will actually contain.
+    if (isPartner) return '/documents/export';
+
     const params = new URLSearchParams();
     if (search)     params.set('search',      search);
     if (statusCode) params.set('status_code', statusCode);
@@ -158,7 +163,12 @@ export default function DocumentsIndex({ documents, filters, partners, can_expor
         description={t('documents.description')}
         action={
           <div className="flex flex-wrap items-center gap-2">
-            {can_export && <ExportExcelButton href={buildExportUrl()} />}
+            {can_export && (
+              <ExportExcelButton
+                href={buildExportUrl()}
+                label={isPartner ? t('documents.btn_export_all') : undefined}
+              />
+            )}
             {canSubmitOngoing && (
               <Link
                 href="/documents/submit-ongoing"

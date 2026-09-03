@@ -21,6 +21,7 @@ import {
 interface Props {
   document: DocumentRecord;
   anchor_failed: boolean;
+  can_edit_punchlist: boolean;
   pdf_url: string | null;
   original_pdf_url: string | null;
   excel_attachment: ExcelAttachment | null;
@@ -1171,7 +1172,7 @@ function AuditTrailTab({ logs, documentId }: { logs: AuditLogEntry[]; documentId
 
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
-export default function DocumentShow({ document: doc, anchor_failed, original_pdf_url, excel_attachment, audit_logs, initial_tab, partners }: Props) {
+export default function DocumentShow({ document: doc, anchor_failed, can_edit_punchlist, original_pdf_url, excel_attachment, audit_logs, initial_tab, partners }: Props) {
   const { auth, flash } = usePage<PageProps>().props;
   const { t } = useTranslation();
   const isPartner    = auth.user?.role === 'partner';
@@ -1240,8 +1241,9 @@ export default function DocumentShow({ document: doc, anchor_failed, original_pd
   const isDraft      = statusCode === 'draft';
   // '14' (punchlist revision) is only editable by Admin or the document's owning Partner —
   // never a Partner viewing someone else's document, and never '17' (L1 gate, no edit page).
-  const isOwningPartner  = isPartner && doc.submitter?.id === auth.user?.id;
-  const canEditPunchlist = statusCode === '14' && (isAdmin || isOwningPartner);
+  // Computed server-side from the same predicate as the upload endpoint's own gate: a
+  // Partner owns the document through their org, which the client can't determine.
+  const canEditPunchlist = can_edit_punchlist;
   const canEdit      = canEditPunchlist || ['02', '05', '08', '11', 'draft'].includes(statusCode);
   const canReassign  = isAdmin && !['draft', '13', '14', '15', '16', '17'].includes(statusCode);
   const canReplacement = isAdmin && isDone;

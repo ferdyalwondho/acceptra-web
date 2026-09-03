@@ -110,7 +110,8 @@
     "create_success": "User created and invitation sent.",
     "update_success": "User updated successfully.",
     "delete_success": "User deleted successfully.",
-    "resend_success": "Invitation resent successfully."
+    "resend_success": "Invitation resent successfully.",
+    "export_pending_filtered": "Export pending users (current filter)"
   },
   "notifications": {
     "title": "Notifications",
@@ -182,7 +183,18 @@
     "history_col_date": "Date",
     "action_approved": "Approved",
     "action_punchlist": "Approved w/ Punchlist",
-    "action_rejected": "Rejected"
+    "action_rejected": "Rejected",
+    "search_placeholder": "Search Unique ID, Link ID, or Project Code…",
+    "filter_all_status": "All statuses",
+    "filter_all_partners": "All partners",
+    "sort_newest": "Newest",
+    "sort_oldest": "Oldest",
+    "filter_urgent": "Urgent ({{n}})",
+    "btn_clear": "Clear",
+    "empty_filter_title": "No documents match the filter.",
+    "empty_filter_body": "Try changing or clearing the active filters.",
+    "pagination_summary": "{{from}}–{{to}} of {{total}} documents",
+    "card_waiting_days": "Waiting {{n}} days"
   },
   "signature": {
     "page_title": "Saved Signature — Acceptra",
@@ -403,7 +415,8 @@
         "signature_replaced": "Signature Replaced"
       },
       "routing_panel_pic_auto_notice": "L2-L4 approvers are auto-assigned from the cluster mapping — only the signature placement below is required."
-    }
+    },
+    "btn_export_all": "Export all my documents"
   },
   "partners": {
     "page_title": "Partners — Acceptra",
