@@ -83,6 +83,10 @@ export default function UsersIndex({ users, roles, filters }: Props) {
     applyFilters({ search, role: roleFilter, status: value });
   }
 
+  // The export follows these filters, so the button says so — a leftover search term
+  // used to shrink the file to nothing with no hint why.
+  const hasActiveFilters = !!(search || roleFilter || statusFilter);
+
   function buildExportUrl(): string {
     const params = new URLSearchParams();
     if (search)       params.set('search', search);
@@ -230,7 +234,10 @@ export default function UsersIndex({ users, roles, filters }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2 self-start">
-          <ExportExcelButton href={buildExportUrl()} label={t('users.export_pending')} />
+          <ExportExcelButton
+            href={buildExportUrl()}
+            label={hasActiveFilters ? t('users.export_pending_filtered') : t('users.export_pending')}
+          />
           <Link
             href="/users/create"
             className="flex h-9 items-center gap-2 rounded-md px-4 text-sm font-semibold text-white bg-brand-ink transition-all focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"

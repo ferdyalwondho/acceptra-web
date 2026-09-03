@@ -10,11 +10,16 @@ use App\Jobs\NotifyPartnerJob;
 use App\Models\ApprovalStep;
 use App\Models\Document;
 use App\Models\InAppNotification;
+use App\Models\Partner;
 use App\Models\PunchlistVerification;
 use App\Models\Signature;
+use App\Models\User;
+use App\Services\AtpStatusLabels;
 use App\Services\AuditService;
 use App\Services\ClusterApproverResolutionService;
+use App\Services\DocumentQueryService;
 use App\Support\SignatureImage;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -49,47 +54,64 @@ class ApprovalController extends Controller
             403,
         );
 
-        if (in_array($user->role, self::ADMIN_ROLES)) {
-            $docs = Document::with(['partner', 'approvalSteps.approver'])
-                ->where(function ($q) {
-                    $q->whereHas('approvalSteps', fn ($sq) =>
-                            $sq->where('level_order', 1)
-                               ->where('is_active', true)
-                               ->whereNull('approver_id')
-                        )
-                        ->orWhere('routing_pending', true);
-                })
-                ->orderByDesc('date_atp_submission')
-                ->get();
-        } else {
-            // An approver's queue includes both their active approval step AND any
-            // pending punchlist verification — the latter has no active ApprovalStep
-            // (the approval chain already finished), so it needs its own clause here
-            // or it silently never appears in the list. A PunchlistVerification row
-            // stays 'pending' through the whole '14' (awaiting upload) AND '15'
-            // (awaiting verification) window, so it must also be scoped to '15' —
-            // otherwise a not-yet-actionable '14' document wrongly shows up here too.
-            $docs = Document::with(['partner', 'approvalSteps.approver'])
-                ->where(function ($q) use ($user) {
-                    $q->whereHas('approvalSteps', fn ($sq) =>
-                            $sq->where('approver_id', $user->id)
-                               ->where('is_active', true)
-                        )
-                        ->orWhere(function ($oq) use ($user) {
-                            $oq->where('status_code', '15')
-                                ->whereHas('punchlistVerifications', fn ($pq) =>
-                                    $pq->where('approver_id', $user->id)
-                                       ->where('status', 'pending')
-                                );
-                        });
-                })
-                ->orderByDesc('date_atp_submission')
-                ->get();
-        }
+        // The queue runs to a few hundred documents, so it is searched, filtered and
+        // paginated server-side rather than rendered whole.
+        $base = fn () => $this->queueScope(Document::query(), $user);
 
-        $approvals = $docs->map(fn (Document $doc) => $this->mapDocCard($doc))->values()->all();
+        $filtered = (new DocumentQueryService)->applyFilters(
+            $base()->with(['partner', 'approvalSteps.approver']),
+            $request,
+            // Everyone here already sees only their own queue, so narrowing it further
+            // by partner is safe for approvers too — unlike on the documents list.
+            allowPartnerFilter: true,
+        );
 
-        return Inertia::render('Approvals/Index', ['approvals' => $approvals]);
+        // Oldest-first is how you work a backlog down; newest-first stays the default so
+        // the page opens the way it always has.
+        $dir = $request->input('sort') === 'oldest' ? 'asc' : 'desc';
+
+        $approvals = $filtered
+            ->orderByRaw("date_atp_submission {$dir} NULLS LAST")
+            // Tie-breaker: many documents share a submission date, and without a stable
+            // second key the same row can appear on two pages (or on neither).
+            ->orderBy('id')
+            ->paginate(24)
+            ->withQueryString()
+            ->through(fn (Document $doc) => $this->mapDocCard($doc));
+
+        $queuedStatuses = $base()->distinct()->pluck('status_code');
+
+        return Inertia::render('Approvals/Index', [
+            'approvals' => $approvals,
+            'filters'   => [
+                'search'      => $request->input('search'),
+                'status_code' => $request->input('status_code'),
+                'partner_id'  => $request->input('partner_id'),
+                'filter'      => $request->input('filter'),
+                'sort'        => $dir === 'asc' ? 'oldest' : 'newest',
+            ],
+            // Only the partners and statuses actually present in this queue — a dropdown
+            // full of options that match nothing is worse than no dropdown.
+            'partners' => Partner::whereIn('id', $base()->distinct()->pluck('partner_id'))
+                ->orderBy('name')
+                ->get(['id', 'name']),
+            'status_options' => $queuedStatuses
+                ->sort()
+                ->values()
+                ->map(fn (string $code) => [
+                    'value' => $code,
+                    'label' => AtpStatusLabels::label($code) ?? $code,
+                ]),
+            // Counted with the other filters still applied, so the chip's number is what
+            // clicking it actually returns.
+            'urgent_count' => (new DocumentQueryService)
+                ->applyFilters(
+                    $base(),
+                    $request->duplicate([...$request->query(), 'filter' => 'overdue']),
+                    allowPartnerFilter: true,
+                )
+                ->count(),
+        ]);
     }
 
     // GET /approvals/history
@@ -730,8 +752,48 @@ class ApprovalController extends Controller
         abort_if($step->approver_id !== $user->id, 403, 'Not your approval step.');
     }
 
+    /**
+     * Restrict a document query to what this user has to act on right now.
+     */
+    private function queueScope(Builder $query, User $user): Builder
+    {
+        if (in_array($user->role, self::ADMIN_ROLES)) {
+            return $query->where(function (Builder $q) {
+                $q->whereHas('approvalSteps', fn ($sq) =>
+                        $sq->where('level_order', 1)
+                           ->where('is_active', true)
+                           ->whereNull('approver_id')
+                    )
+                    ->orWhere('routing_pending', true);
+            });
+        }
+
+        // An approver's queue includes both their active approval step AND any
+        // pending punchlist verification — the latter has no active ApprovalStep
+        // (the approval chain already finished), so it needs its own clause here
+        // or it silently never appears in the list. A PunchlistVerification row
+        // stays 'pending' through the whole '14' (awaiting upload) AND '15'
+        // (awaiting verification) window, so it must also be scoped to '15' —
+        // otherwise a not-yet-actionable '14' document wrongly shows up here too.
+        return $query->where(function (Builder $q) use ($user) {
+            $q->whereHas('approvalSteps', fn ($sq) =>
+                    $sq->where('approver_id', $user->id)
+                       ->where('is_active', true)
+                )
+                ->orWhere(function (Builder $oq) use ($user) {
+                    $oq->where('status_code', '15')
+                        ->whereHas('punchlistVerifications', fn ($pq) =>
+                            $pq->where('approver_id', $user->id)
+                               ->where('status', 'pending')
+                        );
+                });
+        });
+    }
+
     private function mapDocCard(Document $doc): array
     {
+        $step = $doc->approvalSteps->firstWhere('is_active', true);
+
         return [
             'id'          => $doc->id,
             'uniqueId'    => $doc->unique_id,
@@ -740,7 +802,7 @@ class ApprovalController extends Controller
             'partner'     => $doc->partner?->name,
             'statusCode'  => $doc->status_code,
             'needsRouting' => (bool) $doc->routing_pending,
-            'activeStep'  => ($step = $doc->approvalSteps->firstWhere('is_active', true))
+            'activeStep'  => $step
                 ? 'L' . $step->level_order . ' — ' . (self::ROLE_LABELS[$step->role] ?? $step->role)
                 : ($doc->routing_pending
                     ? 'Awaiting Routing (L2–L4)'
@@ -748,6 +810,11 @@ class ApprovalController extends Controller
             'submittedAt' => $doc->date_atp_submission
                 ? $doc->date_atp_submission->format('d M Y')
                 : $doc->created_at->format('d M Y'),
+            // How long this step has sat untouched — same clock the "overdue" filter uses,
+            // so a card flagged here is one the "Mendesak" chip would also surface.
+            'waitingDays' => $step && $step->status === 'pending'
+                ? (int) $step->updated_at->diffInDays(now())
+                : null,
             'approvers'   => $doc->approvalSteps
                 ->whereNotNull('approver_id')
                 ->map(fn (ApprovalStep $s) => $s->approver)

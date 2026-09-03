@@ -239,6 +239,14 @@ class DocumentController extends Controller
                 'atp_punchlist' => $document->atp_punchlist,
             ],
             'anchor_failed'    => $needsManual,
+            // Mirrors uploadPunchlistRevision()'s gate exactly, so the button and the
+            // endpoint can't drift apart. The frontend used to require submitted_by ===
+            // me, which hid the button from every PIC of a partner whose document an
+            // Admin had submitted on their behalf — the common case for imported docs.
+            'can_edit_punchlist' => $document->status_code === '14' && (
+                in_array($user->role, self::ADMIN_ROLES)
+                || ($user->role === 'partner' && $document->accessibleByPartner($user))
+            ),
             'pdf_url'          => $pdfSignedUrl,
             'original_pdf_url' => $originalPdfUrl,
             'excel_attachment' => $excelAttachment ? [
@@ -327,11 +335,14 @@ class DocumentController extends Controller
         $query = DeletedDocumentLog::query();
 
         if ($search = $request->input('search')) {
-            $query->where(function ($q) use ($search) {
-                $q->where('unique_id', 'ilike', "%{$search}%")
-                    ->orWhere('project_code', 'ilike', "%{$search}%")
-                    ->orWhere('sow_name', 'ilike', "%{$search}%")
-                    ->orWhere('reason', 'ilike', "%{$search}%");
+            // Escape the LIKE wildcards — unique_ids contain `_` (e.g. "UC_KAL-KS-MTP-1150").
+            $escaped = addcslashes($search, '%_\\');
+
+            $query->where(function ($q) use ($escaped) {
+                $q->where('unique_id', 'ilike', "%{$escaped}%")
+                    ->orWhere('project_code', 'ilike', "%{$escaped}%")
+                    ->orWhere('sow_name', 'ilike', "%{$escaped}%")
+                    ->orWhere('reason', 'ilike', "%{$escaped}%");
             });
         }
 

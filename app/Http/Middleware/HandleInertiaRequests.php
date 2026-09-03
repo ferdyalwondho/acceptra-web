@@ -53,7 +53,11 @@ class HandleInertiaRequests extends Middleware
                     ])->all()
                 : [],
             'flash' => [
-                'success' => fn () => $request->session()->get('status'),
+                // Controllers use both keys — `status` (Laravel's convention) and
+                // `success`. Reading only `status` silently swallowed a dozen
+                // confirmations, e.g. the one after a Partner uploads a punchlist revision.
+                'success' => fn () => $request->session()->get('status')
+                    ?? $request->session()->get('success'),
                 'error'   => fn () => $request->session()->get('error'),
             ],
         ];
