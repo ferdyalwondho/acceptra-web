@@ -11,7 +11,7 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 class DocumentExcelExport
 {
     private const HEADINGS = [
-        'Unique ID', 'Project Code', 'Link ID', 'SOW', 'Partner',
+        'Unique ID', 'PT Index', 'Project Code', 'Link ID', 'SOW', 'Partner',
         'Submitted At', 'Status Overall',
         'L1 Status', 'L1 Approver', 'L1 Date', 'L1 Notes',
         'L2 Status', 'L2 Approver', 'L2 Date', 'L2 Notes',
@@ -37,10 +37,10 @@ class DocumentExcelExport
             'font'    => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
             'fill'    => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E3A5F']],
         ];
-        $sheet->getStyle('A1:W1')->applyFromArray($headerStyle);
+        $sheet->getStyle('A1:X1')->applyFromArray($headerStyle);
 
         // Auto-width for all columns
-        foreach (range('A', 'W') as $col) {
+        foreach (range('A', 'X') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
 
@@ -54,6 +54,7 @@ class DocumentExcelExport
 
                     $row = [
                         $doc->unique_id,
+                        $doc->pt_index,
                         $doc->project_code,
                         $doc->link_id,
                         $doc->sow_name,

@@ -7,6 +7,7 @@ use App\Models\AuditLog;
 use App\Models\Document;
 use App\Models\PunchlistVerification;
 use App\Models\User;
+use App\Services\ClusterApproverResolutionService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -34,6 +35,7 @@ class DashboardController extends Controller
         return match (true) {
             in_array($user->role, ['admin', 'super_admin', 'viewer']) => $this->adminDashboard($user, $request),
             $user->role === 'partner'                                  => $this->partnerDashboard($user, $request),
+            $user->role === 'viewer_customer'                          => $this->viewerCustomerDashboard($user),
             str_starts_with($user->role, 'approver_')                 => $this->approverDashboard($user),
             default                                                    => $this->adminDashboard($user, $request),
         };
@@ -326,21 +328,121 @@ class DashboardController extends Controller
         ]);
     }
 
+    // ── Viewer (Customer) ────────────────────────────────────────────────────
+    // Read-only monitoring, region-scoped instead of personal — reuses the exact same
+    // Dashboard/Approver page/props shape as approverDashboard() above, just with every
+    // "this approver's own steps" filter swapped for "any document in this user's
+    // assigned cluster(s)", and with no concept of actions this user has personally taken.
+
+    private function viewerCustomerDashboard(User $user): Response
+    {
+        $clusterNames = ClusterApproverResolutionService::viewerClusterNames($user)->all();
+
+        // Documents with any active pending approval step, anywhere in the region —
+        // not filtered to a specific approver, since a viewer isn't one.
+        $pendingApprovals = Document::with([
+                'approvalSteps' => fn ($q) =>
+                    $q->where('is_active', true)->where('status', 'pending'),
+            ])
+            ->whereIn('cluster_zone', $clusterNames)
+            ->whereHas('approvalSteps', fn ($q) =>
+                $q->where('is_active', true)->where('status', 'pending')
+            )
+            ->get()
+            ->map(function (Document $doc) {
+                $step = $doc->approvalSteps->first();
+                return [
+                    'id'           => $doc->id,
+                    'uniqueId'     => $doc->unique_id,
+                    'project'      => $doc->link_name ?? $doc->pt_index,
+                    'sow'          => $doc->sow_name,
+                    'statusCode'   => $doc->status_code,
+                    'levelOrder'   => $step?->level_order,
+                    'kind'         => 'approval',
+                    'waitingSince' => $step?->updated_at,
+                ];
+            });
+
+        // Documents awaiting punchlist verification, anywhere in the region.
+        $pendingPunchlistVerifications = Document::with([
+                'punchlistVerifications' => fn ($q) => $q->where('status', 'pending'),
+                'punchlistVerifications.approvalStep',
+            ])
+            ->whereIn('cluster_zone', $clusterNames)
+            ->where('status_code', '15')
+            ->whereHas('punchlistVerifications', fn ($q) => $q->where('status', 'pending'))
+            ->get()
+            ->map(function (Document $doc) {
+                $verification = $doc->punchlistVerifications->first();
+                return [
+                    'id'           => $doc->id,
+                    'uniqueId'     => $doc->unique_id,
+                    'project'      => $doc->link_name ?? $doc->pt_index,
+                    'sow'          => $doc->sow_name,
+                    'statusCode'   => $doc->status_code,
+                    'levelOrder'   => $verification?->approvalStep?->level_order,
+                    'kind'         => 'punchlist',
+                    'waitingSince' => $verification?->updated_at,
+                ];
+            });
+
+        // Top 5 across both — oldest first (longest waiting)
+        $needApproval = $pendingApprovals->concat($pendingPunchlistVerifications)
+            ->sortBy('waitingSince')
+            ->take(5)
+            ->values()
+            ->map(fn (array $item) => [
+                ...$item,
+                'waitingSince' => $item['waitingSince']?->format('d M Y'),
+            ]);
+
+        // Stats — same breakdown as the Approver dashboard, scoped to the region instead
+        // of a single approver.
+        $stats = $this->approvalStatusCounts(null, $clusterNames);
+
+        // A Viewer (Customer) never acts on a step, so "recent history" is repurposed as
+        // the most recently completed documents in the region, in the same list shape.
+        $recentHistory = Document::whereIn('cluster_zone', $clusterNames)
+            ->whereIn('status_code', self::DONE_STATUS_CODES)
+            ->orderByDesc('date_atp_approved')
+            ->limit(5)
+            ->get()
+            ->map(fn (Document $doc) => [
+                'documentId' => $doc->id,
+                'uniqueId'   => $doc->unique_id,
+                'sowName'    => $doc->sow_name,
+                'status'     => 'approved',
+                'actionAt'   => $doc->date_atp_approved?->format('d M Y'),
+            ]);
+
+        return Inertia::render('Dashboard/Approver', [
+            'need_approval'       => $needApproval,
+            'need_approval_count' => $pendingApprovals->count() + $pendingPunchlistVerifications->count(),
+            'recent_history'      => $recentHistory,
+            'stats'               => $stats,
+        ]);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
      * Per-approval-step status breakdown: On Review (pending) / PASS (approved) /
      * PASS with PL (punchlist pending verification) / Reject (rejected, not yet
-     * resubmitted) / ATP Done. Pass null for a system-wide (Admin) total, or a
-     * user id to scope it to that specific approver (Approver dashboard).
+     * resubmitted) / ATP Done. Pass null $approverId for a system-wide (Admin) total,
+     * or a user id to scope it to that specific approver (Approver dashboard).
+     * $clusterNames scopes it to a set of regions instead (Viewer (Customer) dashboard)
+     * — mutually exclusive with $approverId in practice, but nothing stops combining them.
      *
      * @return array{pending: int, approved: int, punchlist_pending: int, rejected_pending: int, atp_done: int}
      */
-    private function approvalStatusCounts(?string $approverId): array
+    private function approvalStatusCounts(?string $approverId, array $clusterNames = []): array
     {
+        $byDocumentCluster = fn ($q) => $q->whereIn('cluster_zone', $clusterNames);
+
         $pending = ApprovalStep::where('is_active', true)
             ->where('status', 'pending')
             ->when($approverId, fn ($q) => $q->where('approver_id', $approverId))
+            ->when($clusterNames, fn ($q) => $q->whereHas('document', $byDocumentCluster))
             ->count();
 
         // PASS = distinct DOCUMENTS this approver has cleanly approved, not a count of
@@ -353,6 +455,7 @@ class DashboardController extends Controller
         // "PASS with PL" stat below, even once verified.
         $approved = AuditLog::whereIn('event', ['step.approved', 'step.offline_imported', 'document.auto_approved_l1'])
             ->when($approverId, fn ($q) => $q->where('user_id', $approverId))
+            ->when($clusterNames, fn ($q) => $q->whereHas('document', $byDocumentCluster))
             ->distinct('document_id')
             ->count();
 
@@ -362,6 +465,7 @@ class DashboardController extends Controller
         // PunchlistVerification row exists yet) through to it actually being verified.
         $punchlistPending = ApprovalStep::where('status', 'approved_with_punchlist')
             ->when($approverId, fn ($q) => $q->where('approver_id', $approverId))
+            ->when($clusterNames, fn ($q) => $q->whereHas('document', $byDocumentCluster))
             ->whereDoesntHave('punchlistVerification', fn ($q) => $q->where('status', 'verified'))
             ->count();
 
@@ -370,6 +474,7 @@ class DashboardController extends Controller
                 $q->where('status', 'rejected')
                   ->when($approverId, fn ($qq) => $qq->where('approver_id', $approverId))
             )
+            ->when($clusterNames, $byDocumentCluster)
             ->whereIn('status_code', ['02', '05', '08', '11'])
             ->count();
 
@@ -378,6 +483,7 @@ class DashboardController extends Controller
                 $q->whereIn('status', ['approved', 'approved_with_punchlist', 'offline_approved'])
                   ->when($approverId, fn ($qq) => $qq->where('approver_id', $approverId))
             )
+            ->when($clusterNames, $byDocumentCluster)
             ->whereIn('status_code', ['13', '16'])
             ->count();
 

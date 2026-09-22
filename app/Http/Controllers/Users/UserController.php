@@ -31,6 +31,7 @@ class UserController extends Controller
         ['value' => 'approver_xls_rth_team', 'label' => 'Approver - XLS RTH Team'],
         ['value' => 'approver_xls_rth',      'label' => 'Approver - XLS RTH'],
         ['value' => 'approver_sme',          'label' => 'Approver - SME'],
+        ['value' => 'viewer_customer',       'label' => 'Viewer (Customer)'],
     ];
 
     // Public so the users:import Artisan command can validate against the same list.
@@ -38,6 +39,7 @@ class UserController extends Controller
         'super_admin', 'admin', 'viewer', 'partner',
         'approver_ms_bo', 'approver_ms_bo_team', 'approver_ms_rts',
         'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme',
+        'viewer_customer',
     ];
 
     // FR-USR-01: Daftar user dengan filter & pagination
@@ -156,7 +158,7 @@ class UserController extends Controller
             'invitation_expires_at' => now()->addHours(72),
         ]);
 
-        ClusterApproverResolutionService::assignClusters($user, $validated['role'], $validated['cluster_ids'] ?? []);
+        $this->assignRegionClusters($user, $validated['role'], $validated['cluster_ids'] ?? []);
 
         $user->notify(new InvitationNotification($token));
 
@@ -236,7 +238,7 @@ class UserController extends Controller
 
         // Role bisa berubah — hapus assignment cluster lama (terikat role lama), lalu buat ulang.
         $user->clusterApprovers()->delete();
-        ClusterApproverResolutionService::assignClusters($user, $validated['role'], $validated['cluster_ids'] ?? []);
+        $this->assignRegionClusters($user, $validated['role'], $validated['cluster_ids'] ?? []);
 
         return redirect()->route('users.index')
             ->with('status', 'User berhasil diperbarui.');
@@ -270,6 +272,19 @@ class UserController extends Controller
 
         return redirect()->route('users.index')
             ->with('status', 'User berhasil dihapus.');
+    }
+
+    // Approver roles use assignClusters()'s single-holder-per-cluster slot semantics;
+    // Viewer (Customer) is a read-only region assignment, not a PIC slot, so it goes
+    // through the non-exclusive assignViewerClusters() instead.
+    private function assignRegionClusters(User $user, string $role, array $clusterIds): void
+    {
+        if ($role === 'viewer_customer') {
+            ClusterApproverResolutionService::assignViewerClusters($user, $clusterIds);
+            return;
+        }
+
+        ClusterApproverResolutionService::assignClusters($user, $role, $clusterIds);
     }
 
     // FR-USR-04: Filter user by role untuk dropdown PIC approver

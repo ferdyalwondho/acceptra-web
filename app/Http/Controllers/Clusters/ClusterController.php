@@ -200,14 +200,19 @@ class ClusterController extends Controller
     public function availableForRole(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'role'    => ['required', 'string', Rule::in(self::APPROVER_ROLES)],
+            'role'    => ['required', 'string', Rule::in([...self::APPROVER_ROLES, 'viewer_customer'])],
             'user_id' => ['nullable', 'uuid'],
         ]);
 
-        $clusters = ClusterApproverResolutionService::availableClustersForRole(
-            $validated['role'],
-            $validated['user_id'] ?? null,
-        );
+        // Viewer (Customer) is a non-exclusive region assignment, not a PIC slot — every
+        // active cluster is always "available" to pick, regardless of who else already
+        // holds it (see ClusterApproverResolutionService::assignViewerClusters()).
+        $clusters = $validated['role'] === 'viewer_customer'
+            ? Cluster::where('status', 'active')->orderBy('name')->get(['id', 'name', 'province', 'display_name'])
+            : ClusterApproverResolutionService::availableClustersForRole(
+                $validated['role'],
+                $validated['user_id'] ?? null,
+            );
 
         return response()->json(['data' => $clusters]);
     }

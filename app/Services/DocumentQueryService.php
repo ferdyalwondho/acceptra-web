@@ -49,6 +49,12 @@ class DocumentQueryService
             });
         } elseif (str_starts_with($user->role, 'approver_')) {
             $query->whereHas('approvalSteps', fn ($q) => $q->where('approver_id', $user->id));
+        } elseif ($user->role === 'viewer_customer') {
+            // Read-only region monitoring — unlike the approver_* branch above, this is
+            // NOT scoped to approval_steps involvement, and has no status filter, so a
+            // Viewer (Customer) sees every document (any status) in their assigned
+            // region(s), not just ones they personally have a stake in.
+            $query->whereIn('cluster_zone', ClusterApproverResolutionService::viewerClusterNames($user));
         }
         // Aviat roles (admin/super_admin/viewer) see all documents
 
