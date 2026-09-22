@@ -118,4 +118,36 @@ class ClusterApproverResolutionService
 
         return ['assigned' => $assigned, 'skipped_taken' => $skippedTaken];
     }
+
+    // Viewer (Customer) is a read-only region assignment, not a PIC slot — unlike
+    // assignClusters() above, any number of viewer-customer users may share the same
+    // cluster, so there is no "slot open" check here. Deliberately kept separate from
+    // APPROVER_ROLES/assignClusters() so real approval routing is never affected.
+    // Returns the same ['assigned' => [...], 'skipped_taken' => [...]] shape as
+    // assignClusters() (skipped_taken always empty) so callers can treat both uniformly.
+    public static function assignViewerClusters(User $user, array $clusterIds): array
+    {
+        foreach ($clusterIds as $clusterId) {
+            ClusterApprover::create([
+                'cluster_id' => $clusterId,
+                'role'       => 'viewer_customer',
+                'user_id'    => $user->id,
+            ]);
+        }
+
+        return ['assigned' => $clusterIds, 'skipped_taken' => []];
+    }
+
+    // Display names of the clusters (regions) assigned to a Viewer (Customer) user —
+    // matched against Document::cluster_zone for read-only region scoping.
+    public static function viewerClusterNames(User $user): Collection
+    {
+        return ClusterApprover::where('user_id', $user->id)
+            ->where('role', 'viewer_customer')
+            ->with('cluster:id,display_name')
+            ->get()
+            ->pluck('cluster.display_name')
+            ->filter()
+            ->values();
+    }
 }

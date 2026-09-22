@@ -26,9 +26,10 @@ interface NavItem {
 const AVIAT_ROLES = ['super_admin', 'admin', 'viewer'];
 const APPROVER_ROLES = ['approver_ms_bo', 'approver_ms_bo_team', 'approver_ms_rts', 'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme'];
 
-function workspace(role: string): 'aviat' | 'partner' | 'approver' {
+function workspace(role: string): 'aviat' | 'partner' | 'approver' | 'viewer_customer' {
   if (AVIAT_ROLES.includes(role)) return 'aviat';
   if (APPROVER_ROLES.includes(role)) return 'approver';
+  if (role === 'viewer_customer') return 'viewer_customer';
   return 'partner';
 }
 
@@ -58,6 +59,14 @@ function approverNav(badge: number, t: (k: string) => string): NavItem[] {
     { label: t('nav.dashboard'),     icon: <LayoutDashboard className="h-4.5 w-4.5" />, href: '/dashboard' },
     { label: t('nav.need_approval'), icon: <Inbox           className="h-4.5 w-4.5" />, href: '/approvals', badge, exact: true },
     { label: t('nav.history'),       icon: <History         className="h-4.5 w-4.5" />, href: '/approvals/history' },
+  ];
+}
+
+// Read-only region monitoring — no approval queue/history (those imply taking action).
+function viewerCustomerNav(t: (k: string) => string): NavItem[] {
+  return [
+    { label: t('nav.dashboard'),  icon: <LayoutDashboard className="h-4.5 w-4.5" />, href: '/dashboard' },
+    { label: t('nav.documents'), icon: <FileText        className="h-4.5 w-4.5" />, href: '/documents' },
   ];
 }
 
@@ -151,8 +160,9 @@ export default function AppShell({ children }: PropsWithChildren) {
   }, []);
 
   const navItems: NavItem[] =
-    ws === 'aviat'   ? aviatNav(user.role, l1PendingCount, t) :
-    ws === 'partner' ? partnerNav(t) :
+    ws === 'aviat'           ? aviatNav(user.role, l1PendingCount, t) :
+    ws === 'partner'         ? partnerNav(t) :
+    ws === 'viewer_customer' ? viewerCustomerNav(t) :
     approverNav(0, t);
 
   function switchLanguage() {
@@ -217,7 +227,7 @@ export default function AppShell({ children }: PropsWithChildren) {
     approver_ms_bo: 'Approver · MS BO', approver_ms_bo_team: 'Approver · MS BO Team',
     approver_ms_rts: 'Approver · MS RTS',
     approver_xls_rth_team: 'Approver · RTH Team', approver_xls_rth: 'Approver · RTH',
-    approver_sme: 'Approver · SME',
+    approver_sme: 'Approver · SME', viewer_customer: 'Viewer (Customer)',
   };
 
   return (
@@ -303,7 +313,7 @@ export default function AppShell({ children }: PropsWithChildren) {
                       <UserCircle className="h-4 w-4 text-[var(--color-text-secondary)]" />
                       {t('avatar.my_profile')}
                     </Link>
-                    {user.role !== 'partner' && user.role !== 'admin' && user.role !== 'super_admin' && (
+                    {user.role !== 'partner' && user.role !== 'admin' && user.role !== 'super_admin' && user.role !== 'viewer_customer' && (
                       <Link href="/profile/signature" onClick={() => setAvatarOpen(false)} className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-subtle)] transition-colors">
                         <PenLine className="h-4 w-4 text-[var(--color-text-secondary)]" />
                         {t('avatar.saved_signature')}

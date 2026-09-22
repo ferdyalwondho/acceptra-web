@@ -82,6 +82,11 @@ class UserSeeder extends Seeder
                 'email' => 'rth2@acceptra.id',
                 'role'  => 'approver_xls_rth',
             ],
+            [
+                'name'  => 'Putri Ramadhani',
+                'email' => 'viewercustomer@acceptra.id',
+                'role'  => 'viewer_customer',
+            ],
         ];
 
         foreach ($users as $data) {

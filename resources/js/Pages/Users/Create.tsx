@@ -22,6 +22,10 @@ const APPROVER_ROLES = [
   'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme',
 ];
 
+// Roles that get assigned one or more Cluster (region) — approvers as an exclusive PIC
+// slot, Viewer (Customer) as a non-exclusive read-only region assignment.
+const REGION_ROLES = [...APPROVER_ROLES, 'viewer_customer'];
+
 export default function UserCreate({ roles, partners }: Props) {
   const { t } = useTranslation();
 
@@ -41,10 +45,10 @@ export default function UserCreate({ roles, partners }: Props) {
   }
 
   const isPartnerRole  = form.data.role === 'partner';
-  const isApproverRole = APPROVER_ROLES.includes(form.data.role);
+  const isRegionRole = REGION_ROLES.includes(form.data.role);
 
   useEffect(() => {
-    if (!isApproverRole) {
+    if (!isRegionRole) {
       setAvailableClusters([]);
       form.setData('cluster_ids', []);
       return;
@@ -151,8 +155,8 @@ export default function UserCreate({ roles, partners }: Props) {
             </div>
           )}
 
-          {/* Cluster assignment (conditional — approver roles only) */}
-          {isApproverRole && (
+          {/* Cluster assignment (conditional — approver + Viewer (Customer) roles) */}
+          {isRegionRole && (
             <div>
               <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
                 {t('users.field_clusters')}

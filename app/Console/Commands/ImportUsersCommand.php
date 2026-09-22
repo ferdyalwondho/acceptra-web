@@ -113,7 +113,9 @@ class ImportUsersCommand extends Command
                 'invitation_expires_at' => now()->addHours(72),
             ]);
 
-            $result = ClusterApproverResolutionService::assignClusters($user, $role, $clusterIds);
+            $result = $role === 'viewer_customer'
+                ? ClusterApproverResolutionService::assignViewerClusters($user, $clusterIds)
+                : ClusterApproverResolutionService::assignClusters($user, $role, $clusterIds);
 
             if (! empty($result['skipped_taken'])) {
                 $takenNames = Cluster::whereIn('id', $result['skipped_taken'])->pluck('name');

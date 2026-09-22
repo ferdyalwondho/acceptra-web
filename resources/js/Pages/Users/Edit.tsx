@@ -25,6 +25,10 @@ const APPROVER_ROLES = [
   'approver_xls_rth_team', 'approver_xls_rth', 'approver_sme',
 ];
 
+// Roles that get assigned one or more Cluster (region) — approvers as an exclusive PIC
+// slot, Viewer (Customer) as a non-exclusive read-only region assignment.
+const REGION_ROLES = [...APPROVER_ROLES, 'viewer_customer'];
+
 export default function UserEdit({ user, roles, partners, assigned_cluster_ids, invitation_link_shares }: Props) {
   const { t } = useTranslation();
   const { flash } = usePage<PageProps>().props;
@@ -52,7 +56,7 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids, 
   const [revealedUrl, setRevealedUrl]         = useState<string | null>(null);
   const [urlCopied, setUrlCopied]             = useState(false);
 
-  const isApproverRole = APPROVER_ROLES.includes(form.data.role);
+  const isRegionRole = REGION_ROLES.includes(form.data.role);
 
   useEffect(() => {
     // Role bukan lagi partner — partner_id lama tidak relevan dan jangan ikut terkirim.
@@ -60,7 +64,7 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids, 
       form.setData('partner_id', '');
     }
 
-    if (!isApproverRole) {
+    if (!isRegionRole) {
       setAvailableClusters([]);
       return;
     }
@@ -267,8 +271,8 @@ export default function UserEdit({ user, roles, partners, assigned_cluster_ids, 
             </div>
           )}
 
-          {/* Cluster assignment (conditional — approver roles only) */}
-          {isApproverRole && (
+          {/* Cluster assignment (conditional — approver + Viewer (Customer) roles) */}
+          {isRegionRole && (
             <div>
               <label className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">
                 {t('users.field_clusters')}
