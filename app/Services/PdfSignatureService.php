@@ -121,7 +121,7 @@ class PdfSignatureService
 
         $parts = [
             $segment($document->sow_name),
-            $segment($document->link_id),
+            $segment(str_replace('/', '_', (string) $document->link_id)),
             $segment($document->project_code),
             $segment($document->pt_index),
         ];
