@@ -19,6 +19,7 @@ use App\Models\User;
 use App\Services\AuditService;
 use App\Services\ClusterApproverResolutionService;
 use App\Services\DocumentQueryService;
+use App\Services\PdfSignatureService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -157,7 +158,10 @@ class DocumentController extends Controller
         $pdfSignedUrl = null;
 
         if ($needsManual && $document->original_pdf_path) {
-            $pdfSignedUrl = route('documents.pdf', $document->id);
+            $pdfSignedUrl = route('documents.pdf.named', [
+                'id'       => $document->id,
+                'filename' => PdfSignatureService::buildDownloadFilename($document),
+            ]);
         }
 
         // Always available (admin-only route) — used by the Re-placement modal so its
