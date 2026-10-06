@@ -88,33 +88,62 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/{id}/audit', function (string $id) {
         return redirect()->route('documents.show', ['id' => $id, 'tab' => 'audit-trail']);
     })->name('documents.audit');
-    Route::get('/documents/{id}/pdf', function (string $id) {
-        $document = \App\Models\Document::findOrFail($id);
-        abort_if(
-            auth()->user()->role === 'partner' && ! $document->accessibleByPartner(auth()->user()),
-            403
-        );
-        abort_if(! $document->original_pdf_path, 404);
+    // Chrome's built-in PDF viewer ignores the Content-Disposition filename on an `inline`
+    // response and names a saved file after the URL's last path segment instead — so
+    // /documents/{id}/pdf saved as "pdf". The canonical routes below therefore carry the real
+    // filename as their last segment; the two bare routes only resolve it and redirect, so
+    // links already shared or bookmarked keep working. The filename segment is cosmetic: the
+    // document is still resolved from {id} alone, which keeps an old link valid even after the
+    // SOW name / PT Index behind that filename changes.
+    $pdfFilename = '[A-Za-z0-9_\-]+\.pdf';
 
-        return (new \App\Services\PdfSignatureService())->streamPdf($document);
-    })->name('documents.pdf');
-    Route::get('/documents/{id}/pdf/previous', function (string $id) {
+    // Authorization has to run before the redirect too — the filename embeds sow_name,
+    // link_id and project_code, which must not leak to a partner through a Location header.
+    $pdfDocument = function (string $id): \App\Models\Document {
         $document = \App\Models\Document::findOrFail($id);
         abort_if(
             auth()->user()->role === 'partner' && ! $document->accessibleByPartner(auth()->user()),
             403
         );
+
+        return $document;
+    };
+
+    $previousPdfOr404 = function (\App\Models\Document $document): void {
         abort_if(
             ! $document->previous_pdf_path || ! \Illuminate\Support\Facades\Storage::exists($document->previous_pdf_path),
             404
         );
+    };
+
+    Route::get('/documents/{id}/pdf', function (string $id) use ($pdfDocument) {
+        $document = $pdfDocument($id);
+        abort_if(! $document->original_pdf_path, 404);
+
+        return redirect()->route('documents.pdf.named', [
+            'id'       => $id,
+            'filename' => \App\Services\PdfSignatureService::buildDownloadFilename($document),
+        ]);
+    })->name('documents.pdf');
+    Route::get('/documents/{id}/pdf/previous', function (string $id) use ($pdfDocument, $previousPdfOr404) {
+        $document = $pdfDocument($id);
+        $previousPdfOr404($document);
+
+        return redirect()->route('documents.pdf.previous.named', [
+            'id'       => $id,
+            'filename' => \App\Services\PdfSignatureService::buildDownloadFilename($document, '_PREVIOUS'),
+        ]);
+    })->name('documents.pdf.previous');
+    Route::get('/documents/{id}/pdf/previous/{filename}', function (string $id) use ($pdfDocument, $previousPdfOr404) {
+        $document = $pdfDocument($id);
+        $previousPdfOr404($document);
 
         return \Illuminate\Support\Facades\Storage::response(
             $document->previous_pdf_path,
             \App\Services\PdfSignatureService::buildDownloadFilename($document, '_PREVIOUS'),
             ['Content-Type' => 'application/pdf']
         );
-    })->name('documents.pdf.previous');
+    })->where('filename', $pdfFilename)->name('documents.pdf.previous.named');
     // The unsigned source PDF, normalized through the same Ghostscript pass
     // PdfSignatureService applies before stamping — used by the placement/re-placement
     // editor so its canvas coordinates line up with what actually gets stamped, even
@@ -126,6 +155,14 @@ Route::middleware('auth')->group(function () {
 
         return (new \App\Services\PdfSignatureService())->streamNormalizedOriginal($document);
     })->name('documents.pdf.original');
+    // Registered after the literal /previous and /original segments, and constrained to a
+    // sanitized *.pdf name, so neither of those can be swallowed by this wildcard.
+    Route::get('/documents/{id}/pdf/{filename}', function (string $id) use ($pdfDocument) {
+        $document = $pdfDocument($id);
+        abort_if(! $document->original_pdf_path, 404);
+
+        return (new \App\Services\PdfSignatureService())->streamPdf($document);
+    })->where('filename', $pdfFilename)->name('documents.pdf.named');
     Route::post('/documents/{id}/reassign',            [DocumentController::class, 'reassign'])->name('documents.reassign');
     Route::post('/documents/{id}/revise',              [DocumentController::class, 'revise'])->name('documents.revise');
     Route::post('/documents/{id}/submit',               [DocumentController::class, 'submit'])->name('documents.submit');

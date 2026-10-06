@@ -18,6 +18,7 @@ use App\Services\AtpStatusLabels;
 use App\Services\AuditService;
 use App\Services\ClusterApproverResolutionService;
 use App\Services\DocumentQueryService;
+use App\Services\PdfSignatureService;
 use App\Support\SignatureImage;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
@@ -261,10 +262,16 @@ class ApprovalController extends Controller
                 'file_size_bytes'   => $excelAttachment->file_size_bytes,
             ] : null,
             'pdf_url'          => $document->original_pdf_path
-                ? route('documents.pdf', $document->id)
+                ? route('documents.pdf.named', [
+                    'id'       => $document->id,
+                    'filename' => PdfSignatureService::buildDownloadFilename($document),
+                ])
                 : null,
             'previous_pdf_url' => $showPreviousPdf
-                ? route('documents.pdf.previous', $document->id)
+                ? route('documents.pdf.previous.named', [
+                    'id'       => $document->id,
+                    'filename' => PdfSignatureService::buildDownloadFilename($document, '_PREVIOUS'),
+                ])
                 : null,
             // Shown to every level throughout this rectification cycle (not just whoever
             // originally rejected it), so all reviewers know why the Partner had to revise.
@@ -311,7 +318,10 @@ class ApprovalController extends Controller
                 // to the reject-flow's L1 gate and requires an active step that doesn't
                 // exist here, since the approval chain already finished before verification).
                 $props['previous_pdf_url'] = $document->previous_pdf_path
-                    ? route('documents.pdf.previous', $document->id)
+                    ? route('documents.pdf.previous.named', [
+                        'id'       => $document->id,
+                        'filename' => PdfSignatureService::buildDownloadFilename($document, '_PREVIOUS'),
+                    ])
                     : null;
                 $props['my_punchlist'] = $myStep ? [
                     'notes'        => $myStep->punchlist_notes,
