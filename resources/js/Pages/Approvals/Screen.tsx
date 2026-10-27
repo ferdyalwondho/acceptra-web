@@ -675,16 +675,21 @@ export default function ApprovalScreen({
       {isVerifyingWithRevision ? (
         // Verify mode: same dual side-by-side layout as the reject-flow's L1 gate below —
         // the pre-revision PDF on the left, the punchlist revision on the right.
-        <div className={cn('grid flex-1 gap-4', previous_pdf_url ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1')}>
+        // Each pane keeps a min-width above the browser's native PDF toolbar collapse
+        // threshold, scrolling horizontally instead of squeezing panes narrower than that.
+        <div className={cn(
+          'flex-1 gap-4',
+          previous_pdf_url ? 'grid auto-cols-[minmax(560px,1fr)] grid-flow-col overflow-x-auto' : 'grid grid-cols-1',
+        )}>
           {previous_pdf_url && (
-            <div className="flex flex-col gap-2">
+            <div className="flex min-w-0 flex-col gap-2">
               <div className="flex items-center gap-2 rounded-md bg-[var(--color-bg-subtle)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)]">
                 <FileText className="h-3.5 w-3.5" /> PDF Utama (Sebelum Revisi)
               </div>
               <PdfViewer url={previous_pdf_url} className="flex-1" />
             </div>
           )}
-          <div className="flex flex-col gap-2">
+          <div className="flex min-w-0 flex-col gap-2">
             <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
               <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Punchlist
             </div>
@@ -693,17 +698,22 @@ export default function ApprovalScreen({
           </div>
         </div>
       ) : (
-        // PDF Viewer — dual view saat ada PDF yang direject sebelumnya di level ini
-        <div className={cn('grid flex-1 gap-4', previous_pdf_url ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1')}>
+        // PDF Viewer — dual view saat ada PDF yang direject sebelumnya di level ini.
+        // Each pane keeps a min-width above the browser's native PDF toolbar collapse
+        // threshold, scrolling horizontally instead of squeezing panes narrower than that.
+        <div className={cn(
+          'flex-1 gap-4',
+          previous_pdf_url ? 'grid auto-cols-[minmax(560px,1fr)] grid-flow-col overflow-x-auto' : 'grid grid-cols-1',
+        )}>
           {previous_pdf_url && (
-            <div className="flex flex-col gap-2">
+            <div className="flex min-w-0 flex-col gap-2">
               <div className="flex items-center gap-2 rounded-md bg-danger-surface/60 px-3 py-1.5 text-xs font-semibold text-danger">
                 <XCircle className="h-3.5 w-3.5" /> PDF Sebelumnya (Ditolak)
               </div>
               <PdfViewer url={previous_pdf_url} className="flex-1" />
             </div>
           )}
-          <div className="flex flex-col gap-2">
+          <div className="flex min-w-0 flex-col gap-2">
             {previous_pdf_url && (
               <div className="flex items-center gap-2 rounded-md bg-success-surface/60 px-3 py-1.5 text-xs font-semibold text-success">
                 <CheckCircle2 className="h-3.5 w-3.5" /> PDF Revisi Terbaru
